@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scrolling Score</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #121212;
+  --surface:   #1e1e1e;
+  --surface2:  #2a2a2a;
+  --border:    #333;
+  --text:      #e8e8e8;
+  --muted:     #888;
+  --orange:    #ffa500;
+  --orange-dk: #cc8400;
+  --green:     #4caf50;
+  --red:       #f44336;
+  --radius:    10px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 16px 64px;
+}
+
+.container {
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ── Header ── */
+.app-header { text-align: center; }
+.app-header h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--orange);
+  letter-spacing: -0.5px;
+}
+.app-header p {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* ── Cards ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+/* ── Drop Zone ── */
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  background: var(--surface);
+  user-select: none;
+}
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--orange);
+  background: rgba(255,165,0,0.05);
+}
+.drop-zone .dz-icon {
+  font-size: 2.5rem;
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+.drop-zone .dz-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.drop-zone .dz-sub {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.drop-zone .dz-link {
+  color: var(--orange);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── File List ── */
+.file-list-section { display: none; }
+.file-list-section.visible { display: block; }
+
+.file-list-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  cursor: default;
+  transition: border-color 0.15s, background 0.15s;
+}
+.file-item.drag-source { opacity: 0.4; }
+.file-item.drag-target { border-color: var(--orange); background: rgba(255,165,0,0.08); }
+
+.file-handle {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.file-handle:active { cursor: grabbing; }
+
+.file-num {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--orange);
+  background: rgba(255,165,0,0.12);
+  border-radius: 4px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
+
+.file-name {
+  flex: 1;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-remove {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.file-remove:hover { color: var(--red); background: rgba(244,67,54,0.12); }
+
+/* ── Options ── */
+.options-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.options-toggle:hover { border-color: var(--orange); }
+.options-toggle .arrow { transition: transform 0.2s; color: var(--muted); }
+.options-toggle.open .arrow { transform: rotate(180deg); }
+
+.options-panel {
+  display: none;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--surface);
+  margin-top: -1px;
+}
+.options-panel.open { display: flex; }
+
+.opt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.opt-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.opt-desc { font-size: 0.8rem; color: var(--muted); }
+
+/* Checkbox */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--orange);
+  cursor: pointer;
+}
+
+/* Slider */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--orange);
+  height: 4px;
+  cursor: pointer;
+}
+.slider-value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--orange);
+  min-width: 60px;
+  text-align: right;
+}
+
+.slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* ── Generate Button ── */
+.btn-generate {
+  width: 100%;
+  padding: 16px;
+  background: var(--orange);
+  color: #000;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+  letter-spacing: 0.03em;
+}
+.btn-generate:hover:not(:disabled) { background: var(--orange-dk); }
+.btn-generate:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── Progress ── */
+.progress-section { display: none; }
+.progress-section.visible { display: block; }
+
+.progress-bar-bg {
+  width: 100%;
+  height: 8px;
+  background: var(--surface2);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--orange);
+  border-radius: 99px;
+  width: 0%;
+  transition: width 0.4s ease;
+}
+.progress-pct {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--orange);
+  margin-bottom: 4px;
+}
+.progress-msg {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+
+/* ── Error ── */
+.error-box {
+  display: none;
+  background: rgba(244,67,54,0.1);
+  border: 1px solid rgba(244,67,54,0.4);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  font-size: 0.85rem;
+  color: #ff8080;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.error-box.visible { display: block; }
+
+/* ── Download ── */
+.btn-download {
+  display: none;
+  width: 100%;
+  padding: 16px;
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-download:hover { background: #388e3c; }
+.btn-download.visible { display: block; }
+
+.btn-reset {
+  width: 100%;
+  padding: 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+  display: none;
+}
+.btn-reset:hover { border-color: var(--orange); color: var(--text); }
+.btn-reset.visible { display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <header class="app-header">
+    <h1>Scrolling Score</h1>
+    <p>Generador de video de partitura de batería con scroll sincronizado</p>
+  </header>
+
+  <!-- Drop Zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="dz-icon">&#9835;</div>
+    <div class="dz-title">Arrastrá tus archivos .mscz aquí</div>
+    <div class="dz-sub">o <span class="dz-link" id="dzLink">hacé click para seleccionar</span></div>
+    <input type="file" id="fileInput" accept=".mscz" multiple style="display:none">
+  </div>
+
+  <!-- File List -->
+  <section class="file-list-section card" id="fileListSection">
+    <div class="file-list-header">Archivos · arrastrá para reordenar</div>
+    <div id="fileList"></div>
+  </section>
+
+  <!-- Options Toggle + Panel -->
+  <div>
+    <button class="options-toggle" id="optionsToggle" type="button">
+      <span>Opciones avanzadas</span>
+      <span class="arrow">&#9660;</span>
+    </button>
+    <div class="options-panel" id="optionsPanel">
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="optHeader" checked>
+        <span>
+          <span class="opt-label">Mostrar encabezado</span><br>
+          <span class="opt-desc">Barra con nombre de la canción y BPM</span>
+        </span>
+      </label>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="optPlayhead" checked>
+        <span>
+          <span class="opt-label">Mostrar línea de playhead</span><br>
+          <span class="opt-desc">Línea naranja vertical que sigue el compás</span>
+        </span>
+      </label>
+
+      <div class="opt-row">
+        <div class="opt-label">Brecha entre páginas</div>
+        <div class="slider-row">
+          <input type="range" id="optPageGap" min="10" max="120" value="40" step="5">
+          <span class="slider-value" id="optPageGapVal">40 px</span>
+        </div>
+      </div>
+
+      <div class="opt-row">
+        <div class="opt-label">Posición de la línea lectora</div>
+        <div class="slider-row">
+          <input type="range" id="optPlayheadFrac" min="0" max="100" value="50" step="5">
+          <span class="slider-value" id="optPlayheadFracVal">Centro</span>
+        </div>
+        <div class="slider-labels"><span>Arriba</span><span>Centro</span><span>Abajo</span></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Generate -->
+  <button class="btn-generate" id="btnGenerate" disabled>Generar Video</button>
+
+  <!-- Progress -->
+  <section class="progress-section card" id="progressSection">
+    <div class="progress-pct" id="progressPct">0%</div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-msg" id="progressMsg">Iniciando…</div>
+  </section>
+
+  <!-- Error -->
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- Download -->
+  <a class="btn-download" id="btnDownload">&#8595; Descargar scrolling_score.mp4</a>
+  <button class="btn-reset" id="btnReset" type="button">Generar otro video</button>
+
+</div>
+
+<script>
+// ─── state ───────────────────────────────────────────────────────────────────
+let files = [];          // ordered array of File objects
+let currentJobId = null;
+let evtSource    = null;
+
+// ─── DOM refs ────────────────────────────────────────────────────────────────
+const dropZone       = document.getElementById("dropZone");
+const fileInput      = document.getElementById("fileInput");
+const dzLink         = document.getElementById("dzLink");
+const fileListSec    = document.getElementById("fileListSection");
+const fileList       = document.getElementById("fileList");
+const optToggle      = document.getElementById("optionsToggle");
+const optPanel       = document.getElementById("optionsPanel");
+const optHeader      = document.getElementById("optHeader");
+const optPlayhead    = document.getElementById("optPlayhead");
+const optPageGap     = document.getElementById("optPageGap");
+const optPageGapVal  = document.getElementById("optPageGapVal");
+const optFrac        = document.getElementById("optPlayheadFrac");
+const optFracVal     = document.getElementById("optPlayheadFracVal");
+const btnGenerate    = document.getElementById("btnGenerate");
+const progressSec    = document.getElementById("progressSection");
+const progressPct    = document.getElementById("progressPct");
+const progressFill   = document.getElementById("progressFill");
+const progressMsg    = document.getElementById("progressMsg");
+const errorBox       = document.getElementById("errorBox");
+const btnDownload    = document.getElementById("btnDownload");
+const btnReset       = document.getElementById("btnReset");
+
+// ─── drop zone ───────────────────────────────────────────────────────────────
+dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("drag-over");
+  addFiles([...e.dataTransfer.files]);
+});
+dropZone.addEventListener("click", e => {
+  if (e.target !== dzLink && e.target !== dropZone && !dropZone.contains(e.target)) return;
+  fileInput.click();
+});
+dzLink.addEventListener("click", e => { e.stopPropagation(); fileInput.click(); });
+fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
+
+function addFiles(newFiles) {
+  const msczOnly = newFiles.filter(f => f.name.toLowerCase().endsWith(".mscz"));
+  if (msczOnly.length === 0) return;
+  files = files.concat(msczOnly);
+  renderFileList();
+}
+
+// ─── file list rendering ─────────────────────────────────────────────────────
+function renderFileList() {
+  if (files.length === 0) {
+    fileListSec.classList.remove("visible");
+    btnGenerate.disabled = true;
+    return;
+  }
+  fileListSec.classList.add("visible");
+  btnGenerate.disabled = false;
+
+  fileList.innerHTML = "";
+  files.forEach((f, i) => {
+    const item = document.createElement("div");
+    item.className = "file-item";
+    item.draggable = true;
+    item.dataset.idx = i;
+    item.innerHTML = `
+      <span class="file-handle" title="Arrastrá para reordenar">&#8801;</span>
+      <span class="file-num">${i + 1}</span>
+      <span class="file-name" title="${f.name}">${f.name}</span>
+      <button class="file-remove" data-idx="${i}" title="Quitar">&times;</button>
+    `;
+    fileList.appendChild(item);
+  });
+
+  // drag-to-reorder
+  let dragSrc = null;
+  fileList.querySelectorAll(".file-item").forEach(item => {
+    item.addEventListener("dragstart", e => {
+      dragSrc = item;
+      item.classList.add("drag-source");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    item.addEventListener("dragend", () => {
+      dragSrc = null;
+      fileList.querySelectorAll(".file-item").forEach(el => {
+        el.classList.remove("drag-source", "drag-target");
+      });
+    });
+    item.addEventListener("dragover", e => {
+      e.preventDefault();
+      if (item !== dragSrc) item.classList.add("drag-target");
+    });
+    item.addEventListener("dragleave", () => item.classList.remove("drag-target"));
+    item.addEventListener("drop", e => {
+      e.preventDefault();
+      if (!dragSrc || dragSrc === item) return;
+      const srcIdx = parseInt(dragSrc.dataset.idx);
+      const dstIdx = parseInt(item.dataset.idx);
+      const moved  = files.splice(srcIdx, 1)[0];
+      files.splice(dstIdx, 0, moved);
+      renderFileList();
+    });
+  });
+
+  // remove buttons
+  fileList.querySelectorAll(".file-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      files.splice(parseInt(btn.dataset.idx), 1);
+      renderFileList();
+    });
+  });
+}
+
+// ─── options ─────────────────────────────────────────────────────────────────
+optToggle.addEventListener("click", () => {
+  optToggle.classList.toggle("open");
+  optPanel.classList.toggle("open");
+});
+
+optPageGap.addEventListener("input", () => {
+  optPageGapVal.textContent = optPageGap.value + " px";
+});
+
+function fracLabel(v) {
+  if (v <= 15) return "Arriba";
+  if (v >= 85) return "Abajo";
+  if (v >= 40 && v <= 60) return "Centro";
+  return v < 50 ? "Arriba-centro" : "Centro-abajo";
+}
+optFrac.addEventListener("input", () => {
+  optFracVal.textContent = fracLabel(parseInt(optFrac.value));
+});
+
+// ─── generate ────────────────────────────────────────────────────────────────
+btnGenerate.addEventListener("click", async () => {
+  if (files.length === 0) return;
+  setGenerating(true);
+
+  // 1. Upload
+  setProgress(2, "Subiendo archivos…");
+  const formData = new FormData();
+  files.forEach(f => formData.append("files", f, f.name));
+
+  let uploadRes;
+  try {
+    const r = await fetch("/upload", { method: "POST", body: formData });
+    uploadRes = await r.json();
+    if (uploadRes.error) throw new Error(uploadRes.error);
+  } catch (err) {
+    showError("Error al subir archivos: " + err.message);
+    setGenerating(false);
+    return;
+  }
+
+  currentJobId = uploadRes.job_id;
+
+  // 2. Start generate
+  const options = {
+    show_header:       optHeader.checked,
+    show_playhead:     optPlayhead.checked,
+    page_gap_extra_px: parseInt(optPageGap.value),
+    playhead_frac:     parseInt(optFrac.value) / 100,
+  };
+
+  try {
+    const r = await fetch("/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: currentJobId, options }),
+    });
+    const res = await r.json();
+    if (res.error) throw new Error(res.error);
+  } catch (err) {
+    showError("Error al iniciar generación: " + err.message);
+    setGenerating(false);
+    return;
+  }
+
+  // 3. SSE progress
+  listenProgress(currentJobId);
+});
+
+function listenProgress(jobId) {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource(`/progress/${jobId}`);
+
+  evtSource.onmessage = e => {
+    const data = JSON.parse(e.data);
+    setProgress(data.pct, data.msg);
+
+    if (data.done) {
+      evtSource.close();
+      evtSource = null;
+      if (data.error) {
+        showError(data.msg);
+        setGenerating(false);
+      } else {
+        showDownload(jobId);
+      }
+    }
+  };
+
+  evtSource.onerror = () => {
+    evtSource.close();
+    evtSource = null;
+    showError("Se perdió la conexión con el servidor.");
+    setGenerating(false);
+  };
+}
+
+// ─── download / reset ────────────────────────────────────────────────────────
+function showDownload(jobId) {
+  btnDownload.href    = `/download/${jobId}`;
+  btnDownload.classList.add("visible");
+  btnReset.classList.add("visible");
+  btnGenerate.style.display = "none";
+}
+
+btnReset.addEventListener("click", () => {
+  files         = [];
+  currentJobId  = null;
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  renderFileList();
+  setProgress(0, "");
+  progressSec.classList.remove("visible");
+  errorBox.classList.remove("visible");
+  btnDownload.classList.remove("visible");
+  btnReset.classList.remove("visible");
+  btnGenerate.style.display = "";
+  btnGenerate.disabled = true;
+});
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+function setProgress(pct, msg) {
+  progressSec.classList.add("visible");
+  progressPct.textContent  = pct + "%";
+  progressFill.style.width = pct + "%";
+  progressMsg.textContent  = msg;
+}
+
+function setGenerating(on) {
+  btnGenerate.disabled = on;
+  btnGenerate.textContent = on ? "Generando…" : "Generar Video";
+}
+
+function showError(msg) {
+  errorBox.textContent = msg;
+  errorBox.classList.add("visible");
+}
+</script>
+</body>
+</html>

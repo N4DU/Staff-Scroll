@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tar -tf scrolling_score_handoff.zip)",
+      "PowerShell(pip *)",
+      "PowerShell(py *)",
+      "PowerShell(winget install *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(taskkill *)",
+      "PowerShell(Get-ChildItem *)"
+    ]
+  }
+}
