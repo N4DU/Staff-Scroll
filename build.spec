@@ -16,13 +16,11 @@ a = Analysis(
     ],
     hiddenimports=[
         'flask',
-        'flask_cors',
         'numpy',
         'PIL',
         'PIL.Image',
         'PIL.ImageDraw',
         'PIL.ImageFont',
-        'mido',
         'xml.etree.ElementTree',
     ],
     hookspath=[],

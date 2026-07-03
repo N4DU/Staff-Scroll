@@ -403,10 +403,12 @@ body {
 
       <div class="opt-row">
         <div class="opt-label">Brecha entre páginas</div>
+        <div class="opt-desc">Cuánto contenido se conserva en la unión entre hojas: 0&nbsp;% recorta justo al borde del pentagrama (máxima continuidad, puede cortar símbolos); 100&nbsp;% conserva las hojas completas (nunca corta nada, más espacio en blanco).</div>
         <div class="slider-row">
-          <input type="range" id="optPageGap" min="10" max="120" value="40" step="5">
-          <span class="slider-value" id="optPageGapVal">40 px</span>
+          <input type="range" id="optPageGap" min="0" max="100" value="30" step="5">
+          <span class="slider-value" id="optPageGapVal">30 %</span>
         </div>
+        <div class="slider-labels"><span>Continuo</span><span>Sin recorte</span></div>
       </div>
 
       <div class="opt-row">
@@ -564,7 +566,7 @@ optToggle.addEventListener("click", () => {
 });
 
 optPageGap.addEventListener("input", () => {
-  optPageGapVal.textContent = optPageGap.value + " px";
+  optPageGapVal.textContent = optPageGap.value + " %";
 });
 
 function fracLabel(v) {
@@ -604,7 +606,7 @@ btnGenerate.addEventListener("click", async () => {
   const options = {
     show_header:       optHeader.checked,
     show_playhead:     optPlayhead.checked,
-    page_gap_extra_px: parseInt(optPageGap.value),
+    page_gap_pct:      parseInt(optPageGap.value),
     playhead_frac:     parseInt(optFrac.value) / 100,
   };
 
