@@ -3,11 +3,9 @@
 # Core rendering
 numpy>=1.24
 Pillow>=10.0
-mido>=1.3
 
 # Web server
 flask>=3.0
-flask-cors>=4.0
 
 # Packaging (dev only)
 pyinstaller>=6.0

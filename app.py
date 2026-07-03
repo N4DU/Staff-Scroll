@@ -5,9 +5,11 @@ import threading
 import subprocess
 import tempfile
 from flask import Flask, request, jsonify, render_template, Response, send_file
+from werkzeug.utils import secure_filename
 
 
 jobs = {}
+_jobs_lock = threading.Lock()
 
 
 def create_app():
@@ -29,10 +31,13 @@ def create_app():
         os.makedirs(mscz_dir, exist_ok=True)
 
         saved_paths = []
-        for f in files:
+        for idx, f in enumerate(files):
             if not f.filename.lower().endswith(".mscz"):
                 return jsonify({"error": f"Archivo no válido: {f.filename}"}), 400
-            dest = os.path.join(mscz_dir, f.filename)
+            # secure_filename evita path traversal; el prefijo numérico evita
+            # colisiones entre archivos con el mismo nombre y fija el orden.
+            safe = secure_filename(f.filename) or f"page{idx + 1}.mscz"
+            dest = os.path.join(mscz_dir, f"{idx + 1:03d}-{safe}")
             f.save(dest)
             saved_paths.append(dest)
 
@@ -57,9 +62,10 @@ def create_app():
             return jsonify({"error": "Job no encontrado"}), 404
 
         job = jobs[job_id]
-        if job.get("started"):
-            return jsonify({"error": "Ya está en proceso"}), 409
-        job["started"] = True
+        with _jobs_lock:
+            if job.get("started"):
+                return jsonify({"error": "Ya está en proceso"}), 409
+            job["started"] = True
 
         t = threading.Thread(target=_run_job, args=(job_id, options), daemon=True)
         t.start()
@@ -98,8 +104,10 @@ def create_app():
             return jsonify({"error": "Archivo no encontrado"}), 404
 
         def _cleanup():
+            # Margen amplio para que send_file termine de transmitir el video
+            # antes de borrar el directorio de trabajo.
             import time as _t
-            _t.sleep(10)
+            _t.sleep(120)
             shutil.rmtree(j["workdir"], ignore_errors=True)
             jobs.pop(job_id, None)
 
@@ -139,10 +147,10 @@ def _run_job(job_id, options):
             engine_cfg["show_header"] = False
         if options.get("show_playhead") is False:
             engine_cfg["playhead_w"] = 0
-        if "page_gap_extra_px" in options:
-            engine_cfg["page_gap_extra_px"] = int(options["page_gap_extra_px"])
+        if "page_gap_pct" in options:
+            engine_cfg["page_gap_pct"] = min(100.0, max(0.0, float(options["page_gap_pct"])))
         if "playhead_frac" in options:
-            engine_cfg["playhead_frac"] = float(options["playhead_frac"])
+            engine_cfg["playhead_frac"] = min(1.0, max(0.0, float(options["playhead_frac"])))
         if options.get("song_name"):
             engine_cfg["song_name"] = str(options["song_name"])
 
@@ -150,7 +158,7 @@ def _run_job(job_id, options):
         engine = build_engine(engine_cfg)
 
         fps      = engine_cfg.get("fps", 30)
-        n_frames = int(engine.total_duration * fps)
+        n_frames = max(1, int(engine.total_duration * fps))
         W, H     = engine.video_w, engine.video_h
         out_path = os.path.join(workdir, "scrolling_score.mp4")
 
@@ -167,20 +175,26 @@ def _run_job(job_id, options):
         ]
 
         prog(82, f"Iniciando renderizado ({n_frames} frames, ~{int(engine.total_duration)}s de video)…")
-        pipe = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        for i in range(n_frames):
-            frame = engine.render_frame(i / fps)
-            pipe.stdin.write(frame.tobytes())
-            if i % max(1, n_frames // 50) == 0:
-                pct = 83 + int((i / n_frames) * 16)
-                prog(pct, f"Renderizando frame {i}/{n_frames}…")
-
-        pipe.stdin.close()
-        _, stderr_out = pipe.communicate()
+        # stderr va a un archivo: con stderr=PIPE sin lector, el buffer se
+        # llena y ffmpeg + este proceso quedan bloqueados (deadlock).
+        stderr_path = os.path.join(workdir, "ffmpeg_stderr.log")
+        with open(stderr_path, "wb") as errf:
+            pipe = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
+            try:
+                for i in range(n_frames):
+                    frame = engine.render_frame(i / fps)
+                    pipe.stdin.write(frame.tobytes())
+                    if i % max(1, n_frames // 50) == 0:
+                        pct = 83 + int((i / n_frames) * 16)
+                        prog(pct, f"Renderizando frame {i}/{n_frames}…")
+                pipe.stdin.close()
+            except BrokenPipeError:
+                pass  # ffmpeg murió a mitad de camino; el returncode lo dirá
+            pipe.wait()
 
         if pipe.returncode != 0:
-            err = stderr_out.decode("utf-8", errors="replace")
+            with open(stderr_path, encoding="utf-8", errors="replace") as f:
+                err = f.read()
             raise RuntimeError(f"ffmpeg falló:\n{err[-600:]}")
 
         j["output"] = out_path

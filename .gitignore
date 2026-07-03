@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller
+build/
+dist/
+
+# Herramientas de desarrollo
+.claude/
+
+# Archivos temporales
+*.log
+*.tmp

@@ -6,7 +6,7 @@ Handles the MuseScore → PNG/SVG/MSCX pipeline portably.
 Responsibilities:
   1. Locate mscore3/mscore/MuseScore executable on any platform
   2. Extract + patch .mscz files (fix version mismatch)
-  3. Render to PNG + SVG + MIDI via MuseScore headless
+  3. Render to PNG + SVG via MuseScore headless
   4. Return job config ready to pass to ScoreEngine
 
 Usage:
@@ -19,7 +19,7 @@ Usage:
     # cfg is a dict ready for build_engine(cfg)
 """
 
-import os, sys, re, zipfile, subprocess, platform, shutil, tempfile
+import os, re, zipfile, subprocess, platform, shutil, tempfile
 from pathlib import Path
 
 # ─── MuseScore locator ────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ def find_musescore():
         if path and os.path.isfile(path):
             return path
     raise RuntimeError(
-        "MuseScore not found. Please install MuseScore 3 or 4 from https://musescore.org"
+        "No se encontró MuseScore. Instalá MuseScore 3 o 4 desde https://musescore.org"
     )
 
 def _run_mscore(mscore_bin, args, workdir=None):
@@ -102,6 +102,20 @@ def _extract_and_patch_mscz(mscz_path, mscx_dir):
     out_path.write_text(content, encoding="utf-8")
     return str(out_path), base
 
+def _check_single_page(out_dir, i, ext):
+    """El motor asume una hoja por .mscz: verifica que MuseScore haya escrito
+    exactamente `{i}-score-1.{ext}` y avisa con claridad si el archivo tiene
+    más de una hoja (el contenido extra se perdería en silencio)."""
+    first = os.path.join(out_dir, f"{i}-score-1.{ext}")
+    if not os.path.isfile(first):
+        raise RuntimeError(
+            f"MuseScore no generó la salida esperada para la página {i} ({ext}).")
+    if os.path.isfile(os.path.join(out_dir, f"{i}-score-2.{ext}")):
+        raise RuntimeError(
+            f"El archivo {i} tiene más de una hoja. Esta app espera un .mscz "
+            "por hoja: dividí la partitura en un archivo por página y volvé a subirlos.")
+
+
 # ─── main pipeline ────────────────────────────────────────────────────────────
 
 def process_mscz_files(mscz_paths, workdir, progress_cb=None):
@@ -126,16 +140,15 @@ def process_mscz_files(mscz_paths, workdir, progress_cb=None):
     for d in [mscx_dir, png_dir, svg_dir]:
         os.makedirs(d, exist_ok=True)
 
-    _prog(2, "Locating MuseScore…")
+    _prog(2, "Localizando MuseScore…")
     mscore = find_musescore()
 
     n = len(mscz_paths)
     file_nums = list(range(1, n + 1))
-    name_tpl  = "{i}-score"   # internal naming: 1-score, 2-score …
 
     # Phase 1: extract + patch
     for idx, mscz_path in enumerate(mscz_paths):
-        _prog(5 + idx * 5 // n, f"Extracting {Path(mscz_path).name}…")
+        _prog(5 + idx * 5 // n, f"Extrayendo {Path(mscz_path).name}…")
         mscx_path, _ = _extract_and_patch_mscz(mscz_path, mscx_dir)
         # Rename to canonical template name
         canonical = os.path.join(mscx_dir, f"{idx+1}-score.mscx")
@@ -145,24 +158,26 @@ def process_mscz_files(mscz_paths, workdir, progress_cb=None):
     # Phase 2: render PNG + SVG (one MuseScore call per file)
     for idx, i in enumerate(file_nums):
         base_pct = 15 + idx * 60 // n
-        _prog(base_pct, f"Rendering page {i}/{n}…")
+        _prog(base_pct, f"Renderizando página {i}/{n}…")
         mscx = os.path.join(mscx_dir, f"{i}-score.mscx")
 
         # PNG
         png_out = os.path.join(png_dir, f"{i}-score.png")
         r = _run_mscore(mscore, ["-o", png_out, mscx])
         if r.returncode != 0 and "success" not in r.stdout.lower():
-            raise RuntimeError(f"MuseScore PNG render failed for page {i}:\n{r.stderr[:500]}")
+            raise RuntimeError(f"MuseScore falló renderizando el PNG de la página {i}:\n{r.stderr[:500]}")
+        _check_single_page(png_dir, i, "png")
 
         # SVG
         svg_out = os.path.join(svg_dir, f"{i}-score.svg")
         r = _run_mscore(mscore, ["-o", svg_out, mscx])
         if r.returncode != 0 and "success" not in r.stdout.lower():
-            raise RuntimeError(f"MuseScore SVG render failed for page {i}:\n{r.stderr[:500]}")
+            raise RuntimeError(f"MuseScore falló renderizando el SVG de la página {i}:\n{r.stderr[:500]}")
+        _check_single_page(svg_dir, i, "svg")
 
-        _prog(base_pct + 55 // n, f"Page {i}/{n} rendered ✓")
+        _prog(base_pct + 55 // n, f"Página {i}/{n} renderizada ✓")
 
-    _prog(80, "Pipeline complete — building engine config…")
+    _prog(80, "Pipeline completo — preparando configuración del motor…")
 
     # Return engine config dict (all defaults, paths filled in)
     return {
