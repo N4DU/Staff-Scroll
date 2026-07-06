@@ -394,23 +394,45 @@ body {
 .ed-btn.primary:hover { background: var(--orange-dk); }
 .ed-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.ed-main { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
-.ed-video-wrap { flex: 1 1 340px; min-width: 280px; display: flex; justify-content: center; }
+.ed-step {
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(255,165,0,0.08); border: 1px solid rgba(255,165,0,0.35);
+  border-radius: 8px; padding: 12px 16px; font-size: 0.95rem;
+}
+.ed-step-num {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--orange); color: #000; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.ed-video-wrap { display: flex; justify-content: center; }
 #edVideo {
-  max-width: 100%; max-height: 34vh;
+  max-width: 100%; max-height: 44vh;
   border-radius: 8px; border: 1px solid var(--border); background: #fff;
 }
-.ed-side { flex: 1 1 420px; min-width: 320px; display: flex; flex-direction: column; gap: 10px; }
 
 .ed-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-.ed-panel-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 8px; }
 
+.ed-wave-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 #edWave {
-  width: 100%; height: 190px; display: block;
+  width: 100%; height: 230px; display: block;
   background: #161616; border: 1px solid var(--border); border-radius: 8px;
   cursor: crosshair; touch-action: none;
 }
-.ed-wave-hint { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+.ed-wave-hint { font-size: 0.76rem; color: var(--muted); margin-top: 7px; }
+.ed-wave-hint kbd, .ed-tempo-steps kbd {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; font-size: 0.7rem;
+}
+.ed-sep { flex: 0 0 1px; height: 24px; background: var(--border); margin: 0 4px; }
+.ed-adj-label { font-size: 0.83rem; color: var(--muted); }
+
+.ed-advanced summary {
+  cursor: pointer; font-size: 0.88rem; color: var(--muted);
+  user-select: none;
+}
+.ed-advanced summary:hover { color: var(--text); }
+.ed-tempo-steps { margin: 10px 0 12px 20px; font-size: 0.85rem; color: var(--text); line-height: 1.7; }
 
 .ed-transport { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ed-time { font-variant-numeric: tabular-nums; font-size: 0.9rem; color: var(--text); }
@@ -439,13 +461,6 @@ body {
 }
 .ed-anchor-item button { background: none; border: none; color: var(--muted); cursor: pointer; }
 .ed-anchor-item button:hover { color: var(--red); }
-.ed-check { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; cursor: pointer; color: var(--text); }
-.ed-check input { accent-color: var(--orange); }
-.ed-kbd-hints { font-size: 0.72rem; color: var(--muted); line-height: 1.7; }
-.ed-kbd-hints kbd {
-  background: var(--surface2); border: 1px solid var(--border);
-  border-radius: 4px; padding: 1px 5px; font-size: 0.7rem;
-}
 </style>
 </head>
 <body>
@@ -576,64 +591,57 @@ body {
     </div>
   </div>
 
-  <div class="ed-main">
+  <!-- instrucción única, cambia según el paso -->
+  <div class="ed-step" id="edStep">
+    <span class="ed-step-num">1</span>
+    <span id="edStepText">Hac&eacute; click en la onda donde empieza el <b>comp&aacute;s 1</b> de tu partitura. Los golpes de la canci&oacute;n se marcan en celeste y la bandera se imanta a ellos.</span>
+  </div>
 
-    <div class="ed-video-wrap">
-      <video id="edVideo" muted playsinline preload="auto"></video>
+  <div class="ed-panel">
+    <div class="ed-wave-toolbar">
+      <button class="ed-nudge" id="edZoomOut" title="Alejar">&minus;</button>
+      <button class="ed-nudge" id="edZoomIn" title="Acercar">+</button>
+      <button class="ed-nudge" id="edZoomAll" title="Ver toda la canci&oacute;n">Ver todo</button>
+      <span class="ed-time" id="edTime">0:00.000</span>
+      <span class="ed-measure-ind" id="edMeasureInd"></span>
     </div>
-
-    <div class="ed-side">
-
-      <div class="ed-panel">
-        <div class="ed-transport">
-          <button class="ed-btn" id="edPlay" type="button">&#9654; Reproducir</button>
-          <button class="ed-btn" id="edTestStart" type="button">&#8635; Probar inicio</button>
-          <label class="ed-check"><input type="checkbox" id="edLoop"> Bucle</label>
-          <span class="ed-time" id="edTime">0:00.000</span>
-          <span class="ed-measure-ind" id="edMeasureInd"></span>
-        </div>
-      </div>
-
-      <div class="ed-panel">
-        <div class="ed-panel-title">Inicio de la partitura en el audio</div>
-        <div class="ed-offset-row">
-          <button class="ed-nudge" data-ms="-100">&minus;100ms</button>
-          <button class="ed-nudge" data-ms="-10">&minus;10ms</button>
-          <button class="ed-nudge" data-ms="-1">&minus;1ms</button>
-          <input type="text" id="edOffsetInput" value="0.000">
-          <button class="ed-nudge" data-ms="1">+1ms</button>
-          <button class="ed-nudge" data-ms="10">+10ms</button>
-          <button class="ed-nudge" data-ms="100">+100ms</button>
-          <label class="ed-check" style="margin-left:8px"><input type="checkbox" id="edSnap" checked> Im&aacute;n a golpes</label>
-        </div>
-      </div>
-
-      <div class="ed-panel">
-        <div class="ed-panel-title">Tempo</div>
-        <div class="ed-tempo-info" id="edTempoInfo"></div>
-        <div class="ed-offset-row" style="margin-top:8px">
-          <button class="ed-btn" id="edAnchor" type="button">&#9875; Anclar comp&aacute;s aqu&iacute;</button>
-          <button class="ed-btn" id="edTempoReset" type="button">Restablecer tempo</button>
-        </div>
-        <div class="ed-anchor-list" id="edAnchorList"></div>
-      </div>
-
+    <canvas id="edWave"></canvas>
+    <div class="ed-wave-hint">
+      click = poner la bandera de inicio &middot; doble click = escuchar desde ah&iacute; &middot; rueda = zoom &middot; <kbd>Espacio</kbd> reproducir/pausar &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar &plusmn;10ms
     </div>
   </div>
 
   <div class="ed-panel">
-    <canvas id="edWave"></canvas>
-    <div class="ed-wave-hint">
-      Arrastr&aacute; la <b style="color:var(--orange)">banda naranja</b> (la partitura) para alinearla con la canci&oacute;n &middot;
-      click = mover cursor &middot; rueda = zoom &middot; las l&iacute;neas celestes son golpes detectados en el audio
+    <div class="ed-transport">
+      <button class="ed-btn primary" id="edPlay" type="button" disabled>&#9654; Escuchar desde el inicio</button>
+      <button class="ed-btn" id="edTestEnd" type="button" disabled title="Si al final sigue a tiempo, el tempo es correcto">Probar el final</button>
+      <span class="ed-sep"></span>
+      <span class="ed-adj-label">Afinar:</span>
+      <button class="ed-nudge" data-ms="-50" disabled>&#9668;&#9668; 50ms</button>
+      <button class="ed-nudge" data-ms="-10" disabled>&#9668; 10ms</button>
+      <input type="text" id="edOffsetInput" value="&mdash;" disabled>
+      <button class="ed-nudge" data-ms="10" disabled>10ms &#9658;</button>
+      <button class="ed-nudge" data-ms="50" disabled>50ms &#9658;&#9658;</button>
     </div>
-    <div class="ed-kbd-hints">
-      <kbd>Espacio</kbd> reproducir/pausar &nbsp;&middot;&nbsp;
-      <kbd>&larr;</kbd><kbd>&rarr;</kbd> mover &plusmn;10ms &nbsp;&middot;&nbsp;
-      <kbd>Shift</kbd>+<kbd>&larr;&rarr;</kbd> &plusmn;1ms &nbsp;&middot;&nbsp;
-      <kbd>Ctrl</kbd>+<kbd>&larr;&rarr;</kbd> &plusmn;100ms &nbsp;&middot;&nbsp;
-      <kbd>Inicio</kbd> ir al comienzo de la partitura
+  </div>
+
+  <details class="ed-panel ed-advanced" id="edTempoPanel">
+    <summary>&iquest;La canci&oacute;n se desfasa a lo largo del video? (ajuste de tempo)</summary>
+    <div class="ed-tempo-info" id="edTempoInfo" style="margin-top:10px"></div>
+    <ol class="ed-tempo-steps">
+      <li>Us&aacute; <b>Probar el final</b>: si el playhead cae tarde o temprano en los &uacute;ltimos compases, el tempo de la grabaci&oacute;n no es exactamente el de la partitura.</li>
+      <li>Reproduc&iacute; y paus&aacute; (<kbd>Espacio</kbd>) <b>justo en un golpe</b> avanzado de la canci&oacute;n que reconozcas en la partitura.</li>
+      <li>Apret&aacute; el bot&oacute;n e indic&aacute; qu&eacute; comp&aacute;s es. El tempo se recalcula solo y el inicio no se mueve.</li>
+    </ol>
+    <div class="ed-offset-row">
+      <button class="ed-btn" id="edAnchor" type="button">&#9875; El cursor est&aacute; sobre el comp&aacute;s&hellip;</button>
+      <button class="ed-btn" id="edTempoReset" type="button">Restablecer</button>
     </div>
+    <div class="ed-anchor-list" id="edAnchorList"></div>
+  </details>
+
+  <div class="ed-video-wrap">
+    <video id="edVideo" muted playsinline preload="auto"></video>
   </div>
 
 </div>
@@ -951,27 +959,27 @@ function showError(msg) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Editor de sincronización audio ↔ partitura
-//
-// Modelo (el mismo del backend):  audio_t = offset + k · score_t
-//   score_t = 0  →  instante en que arranca la partitura DENTRO del video
-//                   (después del conteo previo, si lo hay)
-//   offset       →  segundo del audio donde cae ese instante
-//   k            →  relación de tempo (k > 1: la grabación real es más lenta)
-// El video se retima al finalizar (setpts); el audio nunca se toca, así la
-// canción conserva su sonido exacto.
+// Editor de sincronización audio ↔ partitura — diseñado para que alguien que
+// nunca lo vio pueda emparejar en tres gestos:
+//   1. click donde empieza el compás 1 (con imán a los golpes detectados)
+//      → se reproduce solo desde justo antes, para verificar al instante
+//   2. afinar con ◀ 10ms ▶ (se puede mientras suena: se corrige en vivo)
+//   3. «Generar video con audio»
+// Modelo:  audio_t = offset + k · score_t   (k = relación de tempo; el video
+// se retima al final con setpts, el audio de la canción nunca se toca).
 // ═══════════════════════════════════════════════════════════════════════════
 const ed = {
   el:      document.getElementById("syncEditor"),
   video:   document.getElementById("edVideo"),
   wave:    document.getElementById("edWave"),
   play:    document.getElementById("edPlay"),
-  test:    document.getElementById("edTestStart"),
-  loopChk: document.getElementById("edLoop"),
+  testEnd: document.getElementById("edTestEnd"),
   time:    document.getElementById("edTime"),
   mInd:    document.getElementById("edMeasureInd"),
   offIn:   document.getElementById("edOffsetInput"),
-  snapChk: document.getElementById("edSnap"),
+  step:    document.getElementById("edStep"),
+  stepNum: document.querySelector("#edStep .ed-step-num"),
+  stepTxt: document.getElementById("edStepText"),
   tempo:   document.getElementById("edTempoInfo"),
   anchBtn: document.getElementById("edAnchor"),
   tempoRst:document.getElementById("edTempoReset"),
@@ -979,21 +987,22 @@ const ed = {
   song:    document.getElementById("edSongName"),
   finalize:document.getElementById("edFinalize"),
   skip:    document.getElementById("edSkip"),
+  zoomIn:  document.getElementById("edZoomIn"),
+  zoomOut: document.getElementById("edZoomOut"),
+  zoomAll: document.getElementById("edZoomAll"),
 };
 const edAudio = new Audio();
 edAudio.preload = "auto";
 
-let edData = null;              // /editor_data payload
-let edOffset = 0, edK = 1;      // alineación actual
-let edAnchors = [];             // [{mi: índice en measures[], u: audio_t}]
-let edZoom = 10, edView = 0;    // px por segundo, inicio visible (s)
-let edDrag = null;              // null | "band" | "seek"
-let edDownX = 0, edDownOffset = 0, edMoved = false;
-let edLoopA = 0, edLoopB = 0;
-let edRAF = null;
+let edData = null;               // /editor_data payload
+let edOffset = null, edK = 1;    // offset=null → todavía no colocaron la bandera
+let edAnchors = [];              // [{mi, u}] anclas de tempo
+let edZoom = 10, edView = 0;     // px por segundo, inicio visible (s)
+let edDrag = null, edDownX = 0, edDownOffset = 0, edMoved = false;
+let edRAF = null, edLastSeek = 0, edReplayTimer = null;
 
 const leadIn   = () => edData.lead_in;
-const scoreDur = () => edData.video_duration - edData.lead_in;   // s de música
+const scoreDur = () => edData.video_duration - edData.lead_in;
 const vidToAud = tv => edOffset + edK * (tv - edData.lead_in);
 const audToVid = u  => edData.lead_in + (u - edOffset) / edK;
 const xOfU = u => (u - edView) * edZoom;
@@ -1003,19 +1012,18 @@ function openEditor(jobId) {
   currentJobId = jobId;
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
-    edOffset = 0; edK = 1; edAnchors = [];
+    edOffset = null; edK = 1; edAnchors = [];
     ed.video.src = `/video/${jobId}`;
     edAudio.src  = `/audio/${jobId}`;
     ed.song.textContent = d.song_name + " · " + d.measures.length +
-      " compases · partitura " + d.score_bpm + " BPM · audio " +
-      fmtTime(d.audio.duration);
+      " compases · partitura " + d.score_bpm + " BPM · audio " + fmtTime(d.audio.duration);
     ed.el.classList.add("visible");
     document.body.style.overflow = "hidden";
     ed.finalize.disabled = false;
-    // zoom inicial: toda la canción visible
     resizeWave();
     edZoom = Math.max(2, (ed.wave.clientWidth - 20) / Math.max(1, d.audio.duration));
     edView = 0;
+    setStep(1);
     updateAll();
   }).catch(() => showError("No se pudieron cargar los datos del editor."));
 }
@@ -1027,9 +1035,19 @@ function closeEditor() {
   if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
 }
 
-// ── refit de tempo desde las anclas ─────────────────────────────────────────
-// El inicio (offset) es fijo; las anclas ajustan k por mínimos cuadrados a
-// través del origen: k = Σ(dt·du) / Σ(dt²). Con una sola ancla es exacto.
+function setStep(n) {
+  ed.stepNum.textContent = n;
+  if (n === 1) {
+    ed.stepTxt.innerHTML = "Hac&eacute; click en la onda donde empieza el <b>comp&aacute;s 1</b> de tu partitura. Los golpes de la canci&oacute;n se marcan en celeste y la bandera se imanta a ellos.";
+  } else {
+    ed.stepTxt.innerHTML = "Escuch&aacute; y mir&aacute; el video: &iquest;la l&iacute;nea naranja cae con los golpes? Afin&aacute; con <b>&#9668; 10ms &#9658;</b> (pod&eacute;s hacerlo mientras suena) y despu&eacute;s <b>Generar video con audio</b>.";
+  }
+  const placed = edOffset !== null;
+  ed.play.disabled = ed.testEnd.disabled = ed.offIn.disabled = !placed;
+  document.querySelectorAll(".ed-nudge[data-ms]").forEach(b => b.disabled = !placed);
+}
+
+// ── ajuste de tempo desde las anclas (el inicio queda fijo) ──────────────────
 function refitK() {
   let num = 0, den = 0;
   for (const a of edAnchors) {
@@ -1040,20 +1058,41 @@ function refitK() {
   if (den > 0) edK = Math.min(2, Math.max(0.5, num / den));
 }
 
-function setOffset(v, fromInput) {
-  edOffset = v;
-  refitK();                     // las anclas siguen clavadas a su momento de audio
-  loopRegion();
-  if (!fromInput) ed.offIn.value = edOffset.toFixed(3);
+function setOffset(v, opts = {}) {
+  const first = edOffset === null;
+  edOffset = Math.min(Math.max(v, 0), edData.audio.duration - 0.5);
+  refitK();
+  ed.offIn.value = edOffset.toFixed(3);
+  if (first) {
+    setStep(2);
+    // acercar la vista para afinar, centrada en la bandera
+    if (edZoom < 30) {
+      edZoom = 60;
+      edView = edOffset - (ed.wave.clientWidth * 0.35) / edZoom;
+    }
+  }
   updateAll();
+  // feedback inmediato: al colocar/afinar en pausa, suena solo desde antes
+  if (!opts.silent && edAudio.paused) scheduleReplay(first ? 150 : 600);
 }
 
-function loopRegion() {
-  edLoopA = Math.max(0, edOffset - 1.5);
-  edLoopB = edOffset + 2.5;
+function scheduleReplay(delay) {
+  clearTimeout(edReplayTimer);
+  edReplayTimer = setTimeout(() => playFrom(Math.max(0, edOffset - 1.5)), delay);
 }
 
-// ── dibujo de la forma de onda ───────────────────────────────────────────────
+// ── imán a los golpes detectados ─────────────────────────────────────────────
+function magnet(u) {
+  const tolU = 12 / edZoom;
+  let best = null, bestD = tolU;
+  for (const o of edData.audio.onsets) {
+    const d = Math.abs(o - u);
+    if (d < bestD) { best = o; bestD = d; }
+  }
+  return best !== null ? best : u;
+}
+
+// ── dibujo ───────────────────────────────────────────────────────────────────
 function resizeWave() {
   const dpr = window.devicePixelRatio || 1;
   const w = ed.wave.clientWidth, h = ed.wave.clientHeight;
@@ -1072,17 +1111,20 @@ function drawWave() {
   const dur = edData.audio.duration;
   const mins = edData.audio.waveform.mins, maxs = edData.audio.waveform.maxs;
   const bucketDur = dur / mins.length;
-  const midY = H * 0.5, amp = H * 0.42;
+  const midY = H * 0.52, amp = H * 0.40;
+  const placed = edOffset !== null;
 
-  // banda del conteo previo (si lo hay) + banda de la partitura
-  const uStart = edOffset, uEnd = edOffset + edK * scoreDur();
-  const uLead  = edOffset - edK * leadIn();
-  if (leadIn() > 0) {
-    ctx.fillStyle = "rgba(255,165,0,0.06)";
-    ctx.fillRect(xOfU(uLead), 0, xOfU(uStart) - xOfU(uLead), H);
+  // banda de la partitura (+ zona de conteo previo)
+  if (placed) {
+    const uStart = edOffset, uEnd = edOffset + edK * scoreDur();
+    const uLead  = edOffset - edK * leadIn();
+    if (leadIn() > 0) {
+      ctx.fillStyle = "rgba(255,165,0,0.05)";
+      ctx.fillRect(xOfU(uLead), 0, xOfU(uStart) - xOfU(uLead), H);
+    }
+    ctx.fillStyle = "rgba(255,165,0,0.10)";
+    ctx.fillRect(xOfU(uStart), 0, xOfU(uEnd) - xOfU(uStart), H);
   }
-  ctx.fillStyle = "rgba(255,165,0,0.12)";
-  ctx.fillRect(xOfU(uStart), 0, xOfU(uEnd) - xOfU(uStart), H);
 
   // forma de onda
   ctx.strokeStyle = "#9a9a9a";
@@ -1101,55 +1143,68 @@ function drawWave() {
   }
   ctx.stroke();
 
-  // onsets detectados (guías celestes)
-  ctx.strokeStyle = "rgba(90,200,255,0.45)";
+  // golpes detectados (guías celestes)
+  ctx.strokeStyle = "rgba(90,200,255,0.5)";
   for (const o of edData.audio.onsets) {
     const x = xOfU(o);
     if (x < 0 || x > W) continue;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 16); ctx.stroke();
-    ctx.save(); ctx.globalAlpha = 0.35;
-    ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 18); ctx.stroke();
+    ctx.save(); ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.moveTo(x, 18); ctx.lineTo(x, H); ctx.stroke();
     ctx.restore();
   }
 
-  // líneas de compás de la partitura, mapeadas al audio
-  const ms = edData.measures;
-  const mSpacingPx = ms.length > 1 ? (vidToAud(ms[1].t) - vidToAud(ms[0].t)) * edZoom : 999;
-  ctx.textBaseline = "top"; ctx.font = "10px sans-serif";
-  for (let i = 0; i < ms.length; i++) {
-    const u = vidToAud(ms[i].t);
-    const x = xOfU(u);
-    if (x < -40 || x > W + 40) continue;
-    const pageChange = i > 0 && ms[i].page !== ms[i - 1].page;
-    if (i === 0) {
-      ctx.strokeStyle = "#ffa500"; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-      ctx.fillStyle = "#ffa500"; ctx.fillText("▶ compás 1", x + 4, 2);
-    } else if (pageChange) {
-      ctx.strokeStyle = "rgba(255,165,0,0.6)"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-      ctx.fillStyle = "rgba(255,165,0,0.8)"; ctx.fillText("pág " + ms[i].page, x + 3, 2);
-    } else if (mSpacingPx > 5) {
-      ctx.strokeStyle = "rgba(255,165,0,0.22)"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, H * 0.15); ctx.lineTo(x, H); ctx.stroke();
-      if (mSpacingPx > 42 && (i % 4 === 0)) {
-        ctx.fillStyle = "rgba(255,165,0,0.55)"; ctx.fillText(String(i + 1), x + 3, H - 13);
+  if (placed) {
+    // líneas de compás mapeadas al audio
+    const ms = edData.measures;
+    const mSpacingPx = ms.length > 1 ? (ms[1].t - ms[0].t) * edK * edZoom : 999;
+    ctx.textBaseline = "top"; ctx.font = "10px sans-serif";
+    for (let i = 1; i < ms.length; i++) {
+      const x = xOfU(vidToAud(ms[i].t));
+      if (x < -40 || x > W + 40) continue;
+      const pageChange = ms[i].page !== ms[i - 1].page;
+      if (pageChange) {
+        ctx.strokeStyle = "rgba(255,165,0,0.55)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        ctx.fillStyle = "rgba(255,165,0,0.8)"; ctx.fillText("pág " + ms[i].page, x + 3, 2);
+      } else if (mSpacingPx > 6) {
+        ctx.strokeStyle = "rgba(255,165,0,0.20)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, H * 0.2); ctx.lineTo(x, H); ctx.stroke();
+        if (mSpacingPx > 42 && (i % 4 === 0)) {
+          ctx.fillStyle = "rgba(255,165,0,0.55)"; ctx.fillText(String(i + 1), x + 3, H - 13);
+        }
       }
     }
-  }
 
-  // anclas
-  ctx.fillStyle = "#5ac8ff";
-  for (const a of edAnchors) {
-    const x = xOfU(a.u);
-    if (x < -10 || x > W + 10) continue;
-    ctx.beginPath(); ctx.moveTo(x, H - 14); ctx.lineTo(x - 6, H); ctx.lineTo(x + 6, H); ctx.fill();
-  }
+    // bandera de inicio (compás 1)
+    const fx = xOfU(edOffset);
+    if (fx > -30 && fx < W + 30) {
+      ctx.strokeStyle = "#ffa500"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(fx, 0); ctx.lineTo(fx, H); ctx.stroke();
+      ctx.fillStyle = "#ffa500";
+      ctx.beginPath();
+      ctx.moveTo(fx, 2); ctx.lineTo(fx + 62, 2); ctx.lineTo(fx + 70, 11);
+      ctx.lineTo(fx + 62, 20); ctx.lineTo(fx, 20);
+      ctx.fill();
+      ctx.fillStyle = "#000"; ctx.font = "bold 10px sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillText("compás 1", fx + 5, 12);
+      ctx.textBaseline = "top"; ctx.font = "10px sans-serif";
+    }
 
-  // región de bucle
-  if (ed.loopChk.checked) {
-    ctx.fillStyle = "rgba(76,175,80,0.08)";
-    ctx.fillRect(xOfU(edLoopA), 0, xOfU(edLoopB) - xOfU(edLoopA), H);
+    // anclas de tempo
+    ctx.fillStyle = "#5ac8ff";
+    for (const a of edAnchors) {
+      const x = xOfU(a.u);
+      if (x < -10 || x > W + 10) continue;
+      ctx.beginPath(); ctx.moveTo(x, H - 14); ctx.lineTo(x - 6, H); ctx.lineTo(x + 6, H); ctx.fill();
+    }
+  } else {
+    // aún sin bandera: invitación en el centro
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("👆 hacé click donde arranca tu partitura", W / 2, 16);
+    ctx.textAlign = "left"; ctx.textBaseline = "top";
   }
 
   // cursor de reproducción
@@ -1160,7 +1215,6 @@ function drawWave() {
   }
 }
 
-// ── lecturas de estado ───────────────────────────────────────────────────────
 function fmtTime(s) {
   const neg = s < 0; s = Math.abs(s);
   const m = Math.floor(s / 60), sec = (s - m * 60).toFixed(3).padStart(6, "0");
@@ -1169,23 +1223,23 @@ function fmtTime(s) {
 
 function updateReadouts() {
   ed.time.textContent = fmtTime(edAudio.currentTime || 0);
-  const tv = audToVid(edAudio.currentTime || 0);
-  const ms = edData.measures;
-  let lo = 0, hi = ms.length - 1;
-  if (tv < ms[0].t) { ed.mInd.textContent = leadIn() > 0 ? "· conteo previo" : "· antes del inicio"; }
+  if (edOffset === null) { ed.mInd.textContent = ""; }
   else {
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t <= tv) lo = mid; else hi = mid - 1; }
-    if (tv > ms[ms.length - 1].t + ms[ms.length - 1].dur) ed.mInd.textContent = "· fin de la partitura";
-    else ed.mInd.textContent = "· compás " + (lo + 1) + " · pág " + ms[lo].page;
+    const tv = audToVid(edAudio.currentTime || 0);
+    const ms = edData.measures;
+    if (tv < ms[0].t) ed.mInd.textContent = leadIn() > 0 ? "· conteo previo" : "· antes del inicio";
+    else if (tv > ms[ms.length - 1].t + ms[ms.length - 1].dur) ed.mInd.textContent = "· fin de la partitura";
+    else {
+      let lo = 0, hi = ms.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t <= tv) lo = mid; else hi = mid - 1; }
+      ed.mInd.textContent = "· compás " + (lo + 1) + " · pág " + ms[lo].page;
+    }
   }
-  const effBpm = (edData.score_bpm / edK);
-  const pct = (1 / edK) * 100;
-  ed.tempo.innerHTML =
-    "Audio ≈ <b>" + effBpm.toFixed(1) + " BPM</b> (partitura: " + edData.score_bpm + " BPM · " +
-    pct.toFixed(2) + "%)" +
-    (Math.abs(edK - 1) > 0.0005
-      ? "<br>El video se retimará automáticamente al generar — el audio queda intacto."
-      : "<br>Tempos iguales: el video no se modifica.");
+  const effBpm = edData.score_bpm / edK;
+  ed.tempo.innerHTML = Math.abs(edK - 1) > 0.0005
+    ? "Tempo ajustado: la grabación va a <b>" + effBpm.toFixed(1) + " BPM</b> (partitura: " +
+      edData.score_bpm + "). El video se retima solo al generar; el audio no se toca."
+    : "Sin ajuste: se asume que la grabación va exactamente a " + edData.score_bpm + " BPM.";
 }
 
 function renderAnchors() {
@@ -1194,7 +1248,7 @@ function renderAnchors() {
     const div = document.createElement("div");
     div.className = "ed-anchor-item";
     div.innerHTML = "&#9875; compás <b>" + (a.mi + 1) + "</b> &rarr; " + fmtTime(a.u) +
-      ' <button data-i="' + i + '" title="Quitar ancla">&times;</button>';
+      ' <button title="Quitar ancla">&times;</button>';
     div.querySelector("button").addEventListener("click", () => {
       edAnchors.splice(i, 1); refitK(); updateAll();
     });
@@ -1204,130 +1258,162 @@ function renderAnchors() {
 
 function updateAll() { drawWave(); updateReadouts(); renderAnchors(); }
 
-// ── sincronía video ↔ audio en el preview ────────────────────────────────────
-function syncVideo(force) {
-  const target = Math.min(Math.max(audToVid(edAudio.currentTime), 0),
-                          Math.max(0, (ed.video.duration || edData.video_duration) - 0.05));
-  ed.video.playbackRate = Math.min(2, Math.max(0.5, 1 / edK));
-  if (force || Math.abs(ed.video.currentTime - target) > 0.06) ed.video.currentTime = target;
+// ── reproducción sincronizada video+audio ────────────────────────────────────
+// El audio manda; el video lo sigue con un servo de velocidad (playbackRate).
+// Los seeks del <video> tardan ~100 ms: hacerlos en cada frame congela la
+// imagen — solo se hace seek ante derivas grandes y con enfriamiento.
+function tick() {
+  if (edAudio.paused) { edRAF = null; return; }
+  const dur = ed.video.duration || edData.video_duration;
+  const target = audToVid(edAudio.currentTime);
+  if (target < 0 || target >= dur - 0.05) {
+    if (!ed.video.paused) ed.video.pause();
+    const clamped = Math.min(Math.max(target, 0), Math.max(0, dur - 0.05));
+    if (Math.abs(ed.video.currentTime - clamped) > 0.2) ed.video.currentTime = clamped;
+  } else {
+    if (ed.video.paused) { ed.video.currentTime = target; ed.video.play().catch(() => {}); }
+    const drift = ed.video.currentTime - target;   // + : video adelantado
+    const now = performance.now();
+    if (Math.abs(drift) > 0.4 && now - edLastSeek > 800) {
+      ed.video.currentTime = target;
+      edLastSeek = now;
+    } else {
+      const base = 1 / edK;
+      const corr = Math.max(-0.12, Math.min(0.12, drift));
+      ed.video.playbackRate = Math.min(4, Math.max(0.25, base * (1 - corr)));
+    }
+  }
+  drawWave(); updateReadouts();
+  edRAF = requestAnimationFrame(tick);
 }
 
-function tick() {
-  if (ed.loopChk.checked && edAudio.currentTime > edLoopB) edAudio.currentTime = edLoopA;
-  syncVideo(false);
+function playFrom(u) {
+  edAudio.currentTime = Math.min(Math.max(u, 0), edData.audio.duration - 0.1);
+  const tv = Math.min(Math.max(audToVid(edAudio.currentTime), 0),
+                      Math.max(0, (ed.video.duration || edData.video_duration) - 0.05));
+  ed.video.currentTime = tv;
+  edAudio.play().then(() => {
+    ed.play.innerHTML = "&#10074;&#10074; Pausar";
+    if (!edRAF) edRAF = requestAnimationFrame(tick);
+  }).catch(() => {});
+}
+
+function pauseAll() {
+  edAudio.pause(); ed.video.pause();
+  ed.play.innerHTML = "&#9654; Escuchar desde el inicio";
   drawWave(); updateReadouts();
-  if (!edAudio.paused) edRAF = requestAnimationFrame(tick);
 }
 
 ed.play.addEventListener("click", () => {
-  if (edAudio.paused) {
-    syncVideo(true);
-    edAudio.play(); ed.video.play().catch(() => {});
-    ed.play.innerHTML = "&#10074;&#10074; Pausar";
-    edRAF = requestAnimationFrame(tick);
-  } else {
-    edAudio.pause(); ed.video.pause();
-    ed.play.innerHTML = "&#9654; Reproducir";
-  }
+  if (edOffset === null) return;
+  if (edAudio.paused) playFrom(Math.max(0, edOffset - 1.5));
+  else pauseAll();
 });
-edAudio.addEventListener("pause", () => { ed.video.pause(); ed.play.innerHTML = "&#9654; Reproducir"; });
-edAudio.addEventListener("ended", () => { ed.video.pause(); ed.play.innerHTML = "&#9654; Reproducir"; });
-
-ed.test.addEventListener("click", () => {
-  loopRegion();
-  ed.loopChk.checked = true;
-  edAudio.currentTime = edLoopA;
-  syncVideo(true);
-  if (edAudio.paused) ed.play.click(); else { edAudio.play(); ed.video.play().catch(() => {}); }
+ed.testEnd.addEventListener("click", () => {
+  if (edOffset === null) return;
+  const uEnd = edOffset + edK * scoreDur();
+  playFrom(Math.min(Math.max(0, uEnd - 8), edData.audio.duration - 2));
 });
-ed.loopChk.addEventListener("change", drawWave);
+edAudio.addEventListener("ended", pauseAll);
+ed.video.addEventListener("click", () => ed.play.click());
 
-// ── interacción con la forma de onda ─────────────────────────────────────────
+// ── interacción con la onda ──────────────────────────────────────────────────
 ed.wave.addEventListener("mousedown", e => {
+  if (!edData) return;
   const rect = ed.wave.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const u = uOfX(x);
-  const uL = edOffset - edK * leadIn(), uR = edOffset + edK * scoreDur();
-  edMoved = false; edDownX = x; edDownOffset = edOffset;
-  edDrag = (!e.shiftKey && u >= uL && u <= uR) ? "band" : "seek";
-  if (edDrag === "seek") seekTo(u);
+  edDownX = e.clientX - rect.left;
+  edDownOffset = edOffset;
+  edMoved = false;
+  edDrag = true;
 });
 window.addEventListener("mousemove", e => {
   if (!edDrag) return;
   const rect = ed.wave.getBoundingClientRect();
   const x = e.clientX - rect.left;
-  if (Math.abs(x - edDownX) > 2) edMoved = true;
-  if (edDrag === "band" && edMoved) {
-    let cand = edDownOffset + (x - edDownX) / edZoom;
-    if (ed.snapChk.checked) {
-      const tolU = 12 / edZoom;   // imán: 12 px
-      let best = null, bestD = tolU;
-      for (const o of edData.audio.onsets) {
-        const d = Math.abs(o - cand);
-        if (d < bestD) { best = o; bestD = d; }
-      }
-      if (best !== null) cand = best;
-    }
-    setOffset(cand);
-  } else if (edDrag === "seek" && edMoved) {
-    seekTo(uOfX(x));
+  if (Math.abs(x - edDownX) > 3) edMoved = true;
+  if (edMoved && edDownOffset !== null) {
+    // arrastre: mueve la bandera de forma continua (con imán)
+    setOffset(magnet(edDownOffset + (x - edDownX) / edZoom), { silent: true });
   }
 });
-window.addEventListener("mouseup", () => { edDrag = null; });
+window.addEventListener("mouseup", e => {
+  if (!edDrag) return;
+  edDrag = false;
+  const rect = ed.wave.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  if (!edMoved) {
+    // click simple: colocar la bandera acá (con imán)
+    setOffset(magnet(uOfX(x)));
+  } else if (edDownOffset !== null && edAudio.paused) {
+    scheduleReplay(500);
+  }
+});
+ed.wave.addEventListener("dblclick", e => {
+  // doble click: escuchar desde acá sin mover la bandera
+  clearTimeout(edReplayTimer);
+  const rect = ed.wave.getBoundingClientRect();
+  playFrom(uOfX(e.clientX - rect.left));
+});
 
-function seekTo(u) {
-  edAudio.currentTime = Math.min(Math.max(u, 0), edData.audio.duration - 0.01);
-  syncVideo(true);
-  drawWave(); updateReadouts();
+function zoomAt(factor, xPivot) {
+  const uAt = uOfX(xPivot);
+  edZoom = Math.min(2000, Math.max(1, edZoom * factor));
+  edView = uAt - xPivot / edZoom;
+  drawWave();
 }
-
 ed.wave.addEventListener("wheel", e => {
   e.preventDefault();
   const rect = ed.wave.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const uAt = uOfX(x);
-  const factor = e.deltaY < 0 ? 1.3 : 1 / 1.3;
-  edZoom = Math.min(2000, Math.max(1, edZoom * factor));
-  edView = uAt - x / edZoom;
-  drawWave();
+  zoomAt(e.deltaY < 0 ? 1.3 : 1 / 1.3, e.clientX - rect.left);
 }, { passive: false });
+ed.zoomIn.addEventListener("click",  () => zoomAt(1.5, ed.wave.clientWidth / 2));
+ed.zoomOut.addEventListener("click", () => zoomAt(1 / 1.5, ed.wave.clientWidth / 2));
+ed.zoomAll.addEventListener("click", () => {
+  edZoom = Math.max(1, (ed.wave.clientWidth - 20) / Math.max(1, edData.audio.duration));
+  edView = 0;
+  drawWave();
+});
 
-// ── offset: input y nudges ───────────────────────────────────────────────────
+// ── afinado ──────────────────────────────────────────────────────────────────
 ed.offIn.addEventListener("change", () => {
   const v = parseFloat(ed.offIn.value.replace(",", "."));
-  if (isFinite(v)) setOffset(v, true);
-  ed.offIn.value = edOffset.toFixed(3);
+  if (isFinite(v)) setOffset(v, { silent: true });
+  else ed.offIn.value = edOffset !== null ? edOffset.toFixed(3) : "";
 });
-document.querySelectorAll(".ed-nudge").forEach(btn => {
-  btn.addEventListener("click", () => setOffset(edOffset + parseInt(btn.dataset.ms) / 1000));
+document.querySelectorAll(".ed-nudge[data-ms]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (edOffset === null) return;
+    setOffset(edOffset + parseInt(btn.dataset.ms) / 1000, { silent: !edAudio.paused });
+    if (edAudio.paused) scheduleReplay(600);
+  });
 });
 
 document.addEventListener("keydown", e => {
   if (!ed.el.classList.contains("visible")) return;
   if (e.target === ed.offIn) return;
   if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
-  else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+  else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && edOffset !== null) {
     e.preventDefault();
-    const step = (e.shiftKey ? 1 : e.ctrlKey || e.metaKey ? 100 : 10) / 1000;
-    setOffset(edOffset + (e.key === "ArrowRight" ? step : -step));
+    const step = (e.shiftKey ? 1 : 10) / 1000;
+    setOffset(edOffset + (e.key === "ArrowRight" ? step : -step), { silent: !edAudio.paused });
+    if (edAudio.paused) scheduleReplay(600);
   }
-  else if (e.key === "Home") { e.preventDefault(); seekTo(Math.max(0, edOffset - 1.5)); }
 });
 
-// ── anclas de tempo ──────────────────────────────────────────────────────────
+// ── anclas de tempo (panel avanzado) ─────────────────────────────────────────
 ed.anchBtn.addEventListener("click", () => {
+  if (edOffset === null) return;
   const u = edAudio.currentTime;
   const ms = edData.measures;
-  // compás sugerido: el más cercano al cursor según el mapeo actual
   let best = 0, bestD = Infinity;
   for (let i = 0; i < ms.length; i++) {
     const d = Math.abs(vidToAud(ms[i].t) - u);
     if (d < bestD) { bestD = d; best = i; }
   }
-  const ans = prompt("¿Qué compás cae exactamente en este momento del audio?", String(best + 1));
+  const ans = prompt("¿Qué compás de la partitura empieza justo donde está el cursor?", String(best + 1));
   if (ans === null) return;
   const mi = Math.min(ms.length, Math.max(1, parseInt(ans) || best + 1)) - 1;
-  if (mi === 0) { setOffset(u); return; }   // "compás 1 acá" = mover el inicio
+  if (mi === 0) { setOffset(u); return; }
   const idx = edAnchors.findIndex(a => a.mi === mi);
   if (idx >= 0) edAnchors[idx].u = u; else edAnchors.push({ mi, u });
   refitK(); updateAll();
@@ -1336,6 +1422,11 @@ ed.tempoRst.addEventListener("click", () => { edAnchors = []; edK = 1; updateAll
 
 // ── finalizar ────────────────────────────────────────────────────────────────
 ed.finalize.addEventListener("click", async () => {
+  if (edOffset === null) {
+    ed.stepTxt.innerHTML = "<b>Primero marc&aacute; d&oacute;nde empieza el comp&aacute;s 1</b> haciendo click en la onda (o us&aacute; «Continuar sin audio»).";
+    return;
+  }
+  pauseAll();
   ed.finalize.disabled = true;
   try {
     const r = await fetch(`/finalize/${currentJobId}`, {
