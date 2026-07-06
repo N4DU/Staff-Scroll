@@ -81,11 +81,18 @@ def _parse_svg_layout(svg_path):
         w, h = float(vb.group(1)), float(vb.group(2))
     pts_list = re.findall(r'polyline class="StaffLines"[^>]*points="([^"]+)"', content)
     x_vals, y_set = [], set()
+    line_ext = {}  # y de cada línea de pentagrama → (x_min, x_max)
     for pts in pts_list:
+        xs_l, ys_l = [], []
         for coord in pts.strip().split():
             x, y = coord.split(',')
-            x_vals.append(float(x))
-            y_set.add(float(y))
+            xs_l.append(float(x))
+            ys_l.append(float(y))
+        x_vals.extend(xs_l)
+        for y in ys_l:
+            y_set.add(y)
+            lo, hi = line_ext.get(y, (min(xs_l), max(xs_l)))
+            line_ext[y] = (min(lo, min(xs_l)), max(hi, max(xs_l)))
     if not y_set:
         raise ValueError(
             f"No se encontraron líneas de pentagrama en {os.path.basename(svg_path)} "
@@ -106,9 +113,65 @@ def _parse_svg_layout(svg_path):
             systems.append(cur)
             cur = [y]
     systems.append(cur)
+    tops    = [min(s) for s in systems]
+    bottoms = [max(s) for s in systems]
+
+    # Extremos horizontales POR SISTEMA (un primer sistema con sangría no
+    # debe heredar el ancho de los demás).
+    lefts, rights = [], []
+    for s in systems:
+        l = min(line_ext[y][0] for y in s)
+        r = max(line_ext[y][1] for y in s)
+        lefts.append(l)
+        rights.append(r)
+
+    # ── Barras de compás: posiciones exactas de cada compás ─────────────────
+    # MuseScore exporta cada barline como polyline vertical. Con ellas el
+    # playhead deja de suponer compases de ancho uniforme (MuseScore los
+    # dibuja más anchos o angostos según la densidad de notas).
+    bar_by_sys = [[] for _ in systems]
+    for pts in re.findall(r'polyline class="BarLine"[^>]*points="([^"]+)"', content):
+        xs_b, ys_b = [], []
+        for coord in pts.strip().split():
+            x, y = coord.split(',')
+            xs_b.append(float(x))
+            ys_b.append(float(y))
+        bx = sum(xs_b) / len(xs_b)
+        by = (min(ys_b) + max(ys_b)) / 2
+        best, best_d = None, None
+        for si in range(len(systems)):
+            if tops[si] - 10 <= by <= bottoms[si] + 10:
+                best = si
+                break
+            d = min(abs(by - tops[si]), abs(by - bottoms[si]))
+            if best_d is None or d < best_d:
+                best, best_d = si, d
+        bar_by_sys[best].append(bx)
+
+    # Límites de compás por sistema: [x0, x1, …] (len = compases + 1).
+    # Las barras dobles/de repetición son pares muy juntos → se fusionan.
+    sys_bounds = []
+    for si, xs_b in enumerate(bar_by_sys):
+        if not xs_b:
+            sys_bounds = None
+            break
+        merged = []
+        for x in sorted(xs_b):
+            if merged and x - merged[-1] < 12:
+                merged[-1] = (merged[-1] + x) / 2
+            else:
+                merged.append(x)
+        bounds = [lefts[si]] + [x for x in merged if x > lefts[si] + 12]
+        if bounds[-1] < rights[si] - 12:
+            bounds.append(rights[si])
+        sys_bounds.append(bounds)
+
     return {"w": w, "h": h,
-            "tops":    [min(s) for s in systems],
-            "bottoms": [max(s) for s in systems],
+            "tops":    tops,
+            "bottoms": bottoms,
+            "lefts":   lefts,
+            "rights":  rights,
+            "sys_bounds": sys_bounds,   # None si el SVG no trae barlines
             "left_x":  min(x_vals) if x_vals else 0,
             "right_x": max(x_vals) if x_vals else w}
 
@@ -233,6 +296,39 @@ class ScoreEngine:
                            for i in file_nums}
         self._fidx = {fn: idx for idx, fn in enumerate(file_nums)}
 
+        # ── Geometría por compás ─────────────────────────────────────────────
+        # Con las barras de compás del SVG, cada compás conoce su sistema y su
+        # rango horizontal EXACTOS (MuseScore dibuja compases de anchos
+        # distintos según la densidad de notas — suponer anchos uniformes
+        # desvía el playhead). Solo se usa si la cuenta de barlines coincide
+        # con la del XML; si no, se cae a la aproximación uniforme.
+        self.measure_map = {}
+        for fn in file_nums:
+            lay = self.layouts[fn]
+            n_m = self.score_data[fn]["n_measures"]
+            mm = None
+            if lay.get("sys_bounds"):
+                total = sum(len(b) - 1 for b in lay["sys_bounds"])
+                if total == n_m:
+                    mm = []
+                    for si, bounds in enumerate(lay["sys_bounds"]):
+                        for j in range(len(bounds) - 1):
+                            mm.append((si, bounds[j], bounds[j + 1]))
+            if mm is None:
+                n_s = len(lay["tops"])
+                mps = max(1, n_m // n_s)
+                per_sys = {}
+                for m in range(n_m):
+                    per_sys.setdefault(min(m // mps, n_s - 1), []).append(m)
+                mm = [None] * n_m
+                for si, ms_list in per_sys.items():
+                    l = lay["lefts"][si]
+                    r = lay["rights"][si]
+                    w_m = (r - l) / len(ms_list)
+                    for pos, m in enumerate(ms_list):
+                        mm[m] = (si, l + pos * w_m, l + (pos + 1) * w_m)
+            self.measure_map[fn] = mm
+
         # El tempo se hereda de página en página: cada archivo .mscz es una
         # hoja de la misma obra y normalmente solo la primera trae la marca.
         qps_cur = cfg["bpm"] / 60.0
@@ -340,10 +436,8 @@ class ScoreEngine:
         # Momento en que se activa la segunda línea → dispara el fundido del
         # encabezado (así el título no tapa el primer sistema al arrancar).
         self._t_second_line = self._music_end_t
-        n_s0  = len(lay0["tops"])
-        mps0  = max(1, self.score_data[fn0]["n_measures"] // n_s0)
         for t, _dur, fn, mi, _beats, _bpm in self._timeline:
-            if fn != fn0 or min(mi // mps0, n_s0 - 1) >= 1:
+            if fn != fn0 or self.measure_map[fn][mi][0] >= 1:
                 self._t_second_line = t
                 break
 
@@ -375,23 +469,28 @@ class ScoreEngine:
         cfg = self.cfg
         file_nums = cfg["file_nums"]
 
+        # Posición de cada compás dentro de su sistema (índice y total), a
+        # partir del mapa exacto de geometría.
+        sys_count, sys_pos = {}, {}
+        for fn in file_nums:
+            counts = {}
+            for m_idx, (si, _x0, _x1) in enumerate(self.measure_map[fn]):
+                sys_pos[(fn, m_idx)] = counts.get(si, 0)
+                counts[si] = counts.get(si, 0) + 1
+            for si, c in counts.items():
+                sys_count[(fn, si)] = c
+
         # Sistemas que contienen repeticiones (se recorren más de una pasada):
         # en ellos el avance se reparte por número de pasada, no por compás.
         total_plays, repeated_sys = {}, set()
         for fn in file_nums:
             sd = self.score_data[fn]
-            n_s = len(self.layouts[fn]["tops"])
-            mps = max(1, sd["n_measures"] // n_s)
             for m in sd["played"]:
-                s = min(m // mps, n_s - 1)
+                s = self.measure_map[fn][m][0]
                 total_plays[(fn, s)] = total_plays.get((fn, s), 0) + 1
-        for fn in file_nums:
-            sd = self.score_data[fn]
-            n_s = len(self.layouts[fn]["tops"])
-            mps = max(1, sd["n_measures"] // n_s)
-            for (f, s), c in total_plays.items():
-                if f == fn and c > mps:
-                    repeated_sys.add((f, s))
+        for (f, s), c in total_plays.items():
+            if c > sys_count[(f, s)]:
+                repeated_sys.add((f, s))
 
         # Índice global de sistemas para conocer el "sistema siguiente"
         all_sys, sys_gidx = [], {}
@@ -403,17 +502,16 @@ class ScoreEngine:
         base_kf, timeline = [], []
         t, sys_play_count = 0.0, {}
         for fidx, fn in enumerate(file_nums):
-            sd  = self.score_data[fn]
-            n_s = len(self.layouts[fn]["tops"])
-            mps = max(1, sd["n_measures"] // n_s)
+            sd = self.score_data[fn]
             for m_idx in sd["played"]:
                 info  = sd["measures"][m_idx]
                 dur   = info["beats"] / info["qps"]      # segundos de este compás
-                sys_i = min(m_idx // mps, n_s - 1)
+                sys_i = self.measure_map[fn][m_idx][0]
                 key   = (fn, sys_i)
                 count_before = sys_play_count.get(key, 0)
-                total = total_plays.get(key, mps)
-                frac  = ((m_idx % mps) / mps if key not in repeated_sys
+                total = total_plays.get(key, 1)
+                n_in_sys = sys_count[key]
+                frac  = (sys_pos[(fn, m_idx)] / n_in_sys if key not in repeated_sys
                          else count_before / total)
                 y0 = self._sys_top(fn, fidx, sys_i)
                 gi = sys_gidx[key]
@@ -553,10 +651,7 @@ class ScoreEngine:
         t0, dur, fn, mi, beats, bpm = self._timeline_at(time_s)
         m_prog = min(1.0, max(0.0, (time_s - t0) / dur)) if dur > 0 else 0.0
         fidx  = self._fidx[fn]
-        sd    = self.score_data[fn]
-        n_s   = len(self.layouts[fn]["tops"])
-        mps   = max(1, sd["n_measures"] // n_s)
-        sys_i = min(mi // mps, n_s - 1)
+        sys_i, mx0, mx1 = self.measure_map[fn][mi]
         ct = self._sys_top(fn, fidx, sys_i) - fs
         cb = self._sys_bot(fn, fidx, sys_i) - fs
         pad = 18
@@ -632,14 +727,13 @@ class ScoreEngine:
         frame[strip_top:] = np.array(strip_pil)[:, :, ::-1]
 
         # ── Línea vertical de playhead ───────────────────────────────────────
+        # Usa el rango horizontal EXACTO del compás activo (de las barlines
+        # del SVG): compases de anchos desparejos ya no desvían la línea.
         pw = cfg["playhead_w"]
         if pw > 0:
-            lay = self.layouts[fn]
-            sv  = self._svg_scale[fn]
-            sl, sr = lay["left_x"] * sv, lay["right_x"] * sv
-            mw   = (sr - sl) / mps
-            m_in = mi % mps
-            vl_x = max(0, min(self.video_w - 1, int(sl + (m_in + m_prog) * mw)))
+            sv   = self._svg_scale[fn]
+            vl_x = max(0, min(self.video_w - 1,
+                              int((mx0 + m_prog * (mx1 - mx0)) * sv)))
             eff_hdr = int(_HEADER_H * h_prog) + 4
             vl_top  = max(eff_hdr, ht)
             vl_bot  = min(self.video_h - 1, hb)
