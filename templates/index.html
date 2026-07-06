@@ -352,6 +352,100 @@ body {
 }
 .btn-reset:hover { border-color: var(--orange); color: var(--text); }
 .btn-reset.visible { display: block; }
+
+/* ── Audio Zone ── */
+.audio-zone {
+  cursor: pointer;
+  transition: border-color 0.2s;
+  border: 1px dashed var(--border);
+}
+.audio-zone:hover, .audio-zone.drag-over { border-color: var(--orange); }
+.audio-zone.has-file { border-style: solid; border-color: rgba(255,165,0,0.5); }
+.az-row { display: flex; align-items: center; gap: 14px; }
+.az-icon { font-size: 1.6rem; flex-shrink: 0; }
+.az-text { flex: 1; min-width: 0; }
+.az-optional { color: var(--muted); font-weight: 400; font-size: 0.8rem; }
+.az-filename {
+  color: var(--orange); font-weight: 600; font-size: 0.9rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Editor de sincronización ── */
+.sync-editor {
+  position: fixed; inset: 0; z-index: 50;
+  background: var(--bg);
+  display: none; flex-direction: column;
+  padding: 14px 20px 20px; gap: 12px;
+  overflow-y: auto;
+}
+.sync-editor.visible { display: flex; }
+
+.ed-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ed-top h2 { font-size: 1.15rem; color: var(--orange); }
+.ed-top .ed-song { color: var(--muted); font-size: 0.9rem; }
+.ed-actions { display: flex; gap: 10px; }
+.ed-btn {
+  padding: 10px 18px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 0.9rem;
+  cursor: pointer; font-weight: 600; transition: border-color 0.15s, background 0.15s;
+}
+.ed-btn:hover { border-color: var(--orange); }
+.ed-btn.primary { background: var(--orange); color: #000; border-color: var(--orange); }
+.ed-btn.primary:hover { background: var(--orange-dk); }
+.ed-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ed-main { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.ed-video-wrap { flex: 1 1 340px; min-width: 280px; display: flex; justify-content: center; }
+#edVideo {
+  max-width: 100%; max-height: 34vh;
+  border-radius: 8px; border: 1px solid var(--border); background: #fff;
+}
+.ed-side { flex: 1 1 420px; min-width: 320px; display: flex; flex-direction: column; gap: 10px; }
+
+.ed-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.ed-panel-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 8px; }
+
+#edWave {
+  width: 100%; height: 190px; display: block;
+  background: #161616; border: 1px solid var(--border); border-radius: 8px;
+  cursor: crosshair; touch-action: none;
+}
+.ed-wave-hint { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+
+.ed-transport { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ed-time { font-variant-numeric: tabular-nums; font-size: 0.9rem; color: var(--text); }
+.ed-measure-ind { font-size: 0.85rem; color: var(--orange); font-weight: 600; min-width: 130px; }
+
+.ed-offset-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ed-nudge {
+  padding: 6px 9px; font-size: 0.78rem; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.ed-nudge:hover { border-color: var(--orange); }
+#edOffsetInput {
+  width: 110px; padding: 7px 8px; text-align: center;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--orange); font-weight: 700;
+  font-size: 0.9rem; font-variant-numeric: tabular-nums;
+}
+.ed-tempo-info { font-size: 0.85rem; color: var(--text); line-height: 1.5; }
+.ed-tempo-info b { color: var(--orange); }
+.ed-anchor-list { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.ed-anchor-item {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.82rem; background: var(--surface2);
+  border-radius: 6px; padding: 5px 9px;
+}
+.ed-anchor-item button { background: none; border: none; color: var(--muted); cursor: pointer; }
+.ed-anchor-item button:hover { color: var(--red); }
+.ed-check { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; cursor: pointer; color: var(--text); }
+.ed-check input { accent-color: var(--orange); }
+.ed-kbd-hints { font-size: 0.72rem; color: var(--muted); line-height: 1.7; }
+.ed-kbd-hints kbd {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; font-size: 0.7rem;
+}
 </style>
 </head>
 <body>
@@ -369,6 +463,20 @@ body {
     <div class="dz-title">Arrastrá tus archivos .mscz aquí</div>
     <div class="dz-sub">o <span class="dz-link" id="dzLink">hacé click para seleccionar</span></div>
     <input type="file" id="fileInput" accept=".mscz" multiple style="display:none">
+  </div>
+
+  <!-- Audio Zone -->
+  <div class="audio-zone card" id="audioZone">
+    <div class="az-row">
+      <span class="az-icon">&#127925;</span>
+      <div class="az-text">
+        <div class="opt-label">Audio de la canci&oacute;n <span class="az-optional">(opcional)</span></div>
+        <div class="opt-desc" id="audioDesc">Arrastr&aacute; o hac&eacute; click &mdash; mp3, wav, m4a, ogg, flac&hellip; Al terminar se abre el editor para sincronizarlo con la partitura.</div>
+        <div class="az-filename" id="audioFilename" style="display:none"></div>
+      </div>
+      <button class="file-remove" id="audioRemove" style="display:none" title="Quitar audio">&times;</button>
+    </div>
+    <input type="file" id="audioInput" accept=".mp3,.mpeg,.mpga,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.wma,.aiff,.webm,audio/*" style="display:none">
   </div>
 
   <!-- File List -->
@@ -412,6 +520,16 @@ body {
       </div>
 
       <div class="opt-row">
+        <div class="opt-label">Conteo previo</div>
+        <div class="opt-desc">Pulsos de preparaci&oacute;n antes de que arranque la partitura, al tempo exacto de la canci&oacute;n. As&iacute; ten&eacute;s tiempo de reaccionar al darle play.</div>
+        <div class="slider-row">
+          <input type="range" id="optCountIn" min="0" max="8" value="4" step="1">
+          <span class="slider-value" id="optCountInVal">4 tiempos</span>
+        </div>
+        <div class="slider-labels"><span>Sin conteo</span><span>8 tiempos</span></div>
+      </div>
+
+      <div class="opt-row">
         <div class="opt-label">Posición de la línea lectora</div>
         <div class="slider-row">
           <input type="range" id="optPlayheadFrac" min="0" max="100" value="50" step="5">
@@ -444,11 +562,90 @@ body {
 
 </div>
 
+<!-- ═══ Editor de sincronización (pantalla completa) ═══ -->
+<div class="sync-editor" id="syncEditor">
+
+  <div class="ed-top">
+    <div>
+      <h2>Sincronizaci&oacute;n de audio</h2>
+      <div class="ed-song" id="edSongName"></div>
+    </div>
+    <div class="ed-actions">
+      <button class="ed-btn" id="edSkip" type="button">Continuar sin audio</button>
+      <button class="ed-btn primary" id="edFinalize" type="button">&#10003; Generar video con audio</button>
+    </div>
+  </div>
+
+  <div class="ed-main">
+
+    <div class="ed-video-wrap">
+      <video id="edVideo" muted playsinline preload="auto"></video>
+    </div>
+
+    <div class="ed-side">
+
+      <div class="ed-panel">
+        <div class="ed-transport">
+          <button class="ed-btn" id="edPlay" type="button">&#9654; Reproducir</button>
+          <button class="ed-btn" id="edTestStart" type="button">&#8635; Probar inicio</button>
+          <label class="ed-check"><input type="checkbox" id="edLoop"> Bucle</label>
+          <span class="ed-time" id="edTime">0:00.000</span>
+          <span class="ed-measure-ind" id="edMeasureInd"></span>
+        </div>
+      </div>
+
+      <div class="ed-panel">
+        <div class="ed-panel-title">Inicio de la partitura en el audio</div>
+        <div class="ed-offset-row">
+          <button class="ed-nudge" data-ms="-100">&minus;100ms</button>
+          <button class="ed-nudge" data-ms="-10">&minus;10ms</button>
+          <button class="ed-nudge" data-ms="-1">&minus;1ms</button>
+          <input type="text" id="edOffsetInput" value="0.000">
+          <button class="ed-nudge" data-ms="1">+1ms</button>
+          <button class="ed-nudge" data-ms="10">+10ms</button>
+          <button class="ed-nudge" data-ms="100">+100ms</button>
+          <label class="ed-check" style="margin-left:8px"><input type="checkbox" id="edSnap" checked> Im&aacute;n a golpes</label>
+        </div>
+      </div>
+
+      <div class="ed-panel">
+        <div class="ed-panel-title">Tempo</div>
+        <div class="ed-tempo-info" id="edTempoInfo"></div>
+        <div class="ed-offset-row" style="margin-top:8px">
+          <button class="ed-btn" id="edAnchor" type="button">&#9875; Anclar comp&aacute;s aqu&iacute;</button>
+          <button class="ed-btn" id="edTempoReset" type="button">Restablecer tempo</button>
+        </div>
+        <div class="ed-anchor-list" id="edAnchorList"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="ed-panel">
+    <canvas id="edWave"></canvas>
+    <div class="ed-wave-hint">
+      Arrastr&aacute; la <b style="color:var(--orange)">banda naranja</b> (la partitura) para alinearla con la canci&oacute;n &middot;
+      click = mover cursor &middot; rueda = zoom &middot; las l&iacute;neas celestes son golpes detectados en el audio
+    </div>
+    <div class="ed-kbd-hints">
+      <kbd>Espacio</kbd> reproducir/pausar &nbsp;&middot;&nbsp;
+      <kbd>&larr;</kbd><kbd>&rarr;</kbd> mover &plusmn;10ms &nbsp;&middot;&nbsp;
+      <kbd>Shift</kbd>+<kbd>&larr;&rarr;</kbd> &plusmn;1ms &nbsp;&middot;&nbsp;
+      <kbd>Ctrl</kbd>+<kbd>&larr;&rarr;</kbd> &plusmn;100ms &nbsp;&middot;&nbsp;
+      <kbd>Inicio</kbd> ir al comienzo de la partitura
+    </div>
+  </div>
+
+</div>
+
 <script>
 // ─── state ───────────────────────────────────────────────────────────────────
 let files = [];          // ordered array of File objects
+let audioFile    = null; // optional song audio File
 let currentJobId = null;
 let evtSource    = null;
+
+const AUDIO_EXT_RE = /\.(mp3|mpeg|mpga|wav|m4a|aac|ogg|oga|opus|flac|wma|aiff|aif|webm)$/i;
 
 // ─── DOM refs ────────────────────────────────────────────────────────────────
 const dropZone       = document.getElementById("dropZone");
@@ -489,11 +686,55 @@ dzLink.addEventListener("click", e => { e.stopPropagation(); fileInput.click(); 
 fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
 
 function addFiles(newFiles) {
+  // Si sueltan un audio en la zona principal, lo mandamos al slot de audio
+  const audios = newFiles.filter(f => AUDIO_EXT_RE.test(f.name));
+  if (audios.length > 0) setAudioFile(audios[0]);
   const msczOnly = newFiles.filter(f => f.name.toLowerCase().endsWith(".mscz"));
   if (msczOnly.length === 0) return;
   files = files.concat(msczOnly);
   renderFileList();
 }
+
+// ─── audio slot ──────────────────────────────────────────────────────────────
+const audioZone     = document.getElementById("audioZone");
+const audioInput    = document.getElementById("audioInput");
+const audioFilename = document.getElementById("audioFilename");
+const audioDesc     = document.getElementById("audioDesc");
+const audioRemove   = document.getElementById("audioRemove");
+
+function setAudioFile(f) {
+  if (!f || !AUDIO_EXT_RE.test(f.name)) return;
+  audioFile = f;
+  audioZone.classList.add("has-file");
+  audioFilename.textContent = "♪ " + f.name;
+  audioFilename.style.display = "";
+  audioDesc.style.display = "none";
+  audioRemove.style.display = "";
+}
+function clearAudioFile() {
+  audioFile = null;
+  audioZone.classList.remove("has-file");
+  audioFilename.style.display = "none";
+  audioDesc.style.display = "";
+  audioRemove.style.display = "none";
+}
+audioZone.addEventListener("click", e => {
+  if (e.target === audioRemove) return;
+  audioInput.click();
+});
+audioRemove.addEventListener("click", e => { e.stopPropagation(); clearAudioFile(); });
+audioInput.addEventListener("change", () => {
+  if (audioInput.files.length) setAudioFile(audioInput.files[0]);
+  audioInput.value = "";
+});
+audioZone.addEventListener("dragover", e => { e.preventDefault(); audioZone.classList.add("drag-over"); });
+audioZone.addEventListener("dragleave", () => audioZone.classList.remove("drag-over"));
+audioZone.addEventListener("drop", e => {
+  e.preventDefault();
+  audioZone.classList.remove("drag-over");
+  const f = [...e.dataTransfer.files].find(f => AUDIO_EXT_RE.test(f.name));
+  if (f) setAudioFile(f);
+});
 
 // ─── file list rendering ─────────────────────────────────────────────────────
 function renderFileList() {
@@ -569,6 +810,13 @@ optPageGap.addEventListener("input", () => {
   optPageGapVal.textContent = optPageGap.value + " %";
 });
 
+const optCountIn    = document.getElementById("optCountIn");
+const optCountInVal = document.getElementById("optCountInVal");
+optCountIn.addEventListener("input", () => {
+  const v = parseInt(optCountIn.value);
+  optCountInVal.textContent = v === 0 ? "Sin conteo" : v === 1 ? "1 tiempo" : v + " tiempos";
+});
+
 function fracLabel(v) {
   if (v <= 15) return "Arriba";
   if (v >= 85) return "Abajo";
@@ -588,6 +836,7 @@ btnGenerate.addEventListener("click", async () => {
   setProgress(2, "Subiendo archivos…");
   const formData = new FormData();
   files.forEach(f => formData.append("files", f, f.name));
+  if (audioFile) formData.append("audio", audioFile, audioFile.name);
 
   let uploadRes;
   try {
@@ -608,6 +857,7 @@ btnGenerate.addEventListener("click", async () => {
     show_playhead:     optPlayhead.checked,
     page_gap_pct:      parseInt(optPageGap.value),
     playhead_frac:     parseInt(optFrac.value) / 100,
+    count_in_beats:    parseInt(optCountIn.value),
   };
 
   try {
@@ -642,6 +892,8 @@ function listenProgress(jobId) {
       if (data.error) {
         showError(data.msg);
         setGenerating(false);
+      } else if (data.editor) {
+        openEditor(jobId);
       } else {
         showDownload(jobId);
       }
@@ -668,6 +920,8 @@ btnReset.addEventListener("click", () => {
   files         = [];
   currentJobId  = null;
   if (evtSource) { evtSource.close(); evtSource = null; }
+  clearAudioFile();
+  closeEditor();
   renderFileList();
   setProgress(0, "");
   progressSec.classList.remove("visible");
@@ -695,6 +949,418 @@ function showError(msg) {
   errorBox.textContent = msg;
   errorBox.classList.add("visible");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Editor de sincronización audio ↔ partitura
+//
+// Modelo (el mismo del backend):  audio_t = offset + k · score_t
+//   score_t = 0  →  instante en que arranca la partitura DENTRO del video
+//                   (después del conteo previo, si lo hay)
+//   offset       →  segundo del audio donde cae ese instante
+//   k            →  relación de tempo (k > 1: la grabación real es más lenta)
+// El video se retima al finalizar (setpts); el audio nunca se toca, así la
+// canción conserva su sonido exacto.
+// ═══════════════════════════════════════════════════════════════════════════
+const ed = {
+  el:      document.getElementById("syncEditor"),
+  video:   document.getElementById("edVideo"),
+  wave:    document.getElementById("edWave"),
+  play:    document.getElementById("edPlay"),
+  test:    document.getElementById("edTestStart"),
+  loopChk: document.getElementById("edLoop"),
+  time:    document.getElementById("edTime"),
+  mInd:    document.getElementById("edMeasureInd"),
+  offIn:   document.getElementById("edOffsetInput"),
+  snapChk: document.getElementById("edSnap"),
+  tempo:   document.getElementById("edTempoInfo"),
+  anchBtn: document.getElementById("edAnchor"),
+  tempoRst:document.getElementById("edTempoReset"),
+  anchList:document.getElementById("edAnchorList"),
+  song:    document.getElementById("edSongName"),
+  finalize:document.getElementById("edFinalize"),
+  skip:    document.getElementById("edSkip"),
+};
+const edAudio = new Audio();
+edAudio.preload = "auto";
+
+let edData = null;              // /editor_data payload
+let edOffset = 0, edK = 1;      // alineación actual
+let edAnchors = [];             // [{mi: índice en measures[], u: audio_t}]
+let edZoom = 10, edView = 0;    // px por segundo, inicio visible (s)
+let edDrag = null;              // null | "band" | "seek"
+let edDownX = 0, edDownOffset = 0, edMoved = false;
+let edLoopA = 0, edLoopB = 0;
+let edRAF = null;
+
+const leadIn   = () => edData.lead_in;
+const scoreDur = () => edData.video_duration - edData.lead_in;   // s de música
+const vidToAud = tv => edOffset + edK * (tv - edData.lead_in);
+const audToVid = u  => edData.lead_in + (u - edOffset) / edK;
+const xOfU = u => (u - edView) * edZoom;
+const uOfX = x => edView + x / edZoom;
+
+function openEditor(jobId) {
+  currentJobId = jobId;
+  fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
+    edData = d;
+    edOffset = 0; edK = 1; edAnchors = [];
+    ed.video.src = `/video/${jobId}`;
+    edAudio.src  = `/audio/${jobId}`;
+    ed.song.textContent = d.song_name + " · " + d.measures.length +
+      " compases · partitura " + d.score_bpm + " BPM · audio " +
+      fmtTime(d.audio.duration);
+    ed.el.classList.add("visible");
+    document.body.style.overflow = "hidden";
+    ed.finalize.disabled = false;
+    // zoom inicial: toda la canción visible
+    resizeWave();
+    edZoom = Math.max(2, (ed.wave.clientWidth - 20) / Math.max(1, d.audio.duration));
+    edView = 0;
+    updateAll();
+  }).catch(() => showError("No se pudieron cargar los datos del editor."));
+}
+
+function closeEditor() {
+  ed.el.classList.remove("visible");
+  document.body.style.overflow = "";
+  edAudio.pause(); ed.video.pause();
+  if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
+}
+
+// ── refit de tempo desde las anclas ─────────────────────────────────────────
+// El inicio (offset) es fijo; las anclas ajustan k por mínimos cuadrados a
+// través del origen: k = Σ(dt·du) / Σ(dt²). Con una sola ancla es exacto.
+function refitK() {
+  let num = 0, den = 0;
+  for (const a of edAnchors) {
+    const dt = edData.measures[a.mi].t - edData.lead_in;
+    const du = a.u - edOffset;
+    if (dt > 0.5) { num += dt * du; den += dt * dt; }
+  }
+  if (den > 0) edK = Math.min(2, Math.max(0.5, num / den));
+}
+
+function setOffset(v, fromInput) {
+  edOffset = v;
+  refitK();                     // las anclas siguen clavadas a su momento de audio
+  loopRegion();
+  if (!fromInput) ed.offIn.value = edOffset.toFixed(3);
+  updateAll();
+}
+
+function loopRegion() {
+  edLoopA = Math.max(0, edOffset - 1.5);
+  edLoopB = edOffset + 2.5;
+}
+
+// ── dibujo de la forma de onda ───────────────────────────────────────────────
+function resizeWave() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = ed.wave.clientWidth, h = ed.wave.clientHeight;
+  if (ed.wave.width !== w * dpr) { ed.wave.width = w * dpr; ed.wave.height = h * dpr; }
+}
+
+function drawWave() {
+  if (!edData) return;
+  resizeWave();
+  const dpr = window.devicePixelRatio || 1;
+  const ctx = ed.wave.getContext("2d");
+  const W = ed.wave.clientWidth, H = ed.wave.clientHeight;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const dur = edData.audio.duration;
+  const mins = edData.audio.waveform.mins, maxs = edData.audio.waveform.maxs;
+  const bucketDur = dur / mins.length;
+  const midY = H * 0.5, amp = H * 0.42;
+
+  // banda del conteo previo (si lo hay) + banda de la partitura
+  const uStart = edOffset, uEnd = edOffset + edK * scoreDur();
+  const uLead  = edOffset - edK * leadIn();
+  if (leadIn() > 0) {
+    ctx.fillStyle = "rgba(255,165,0,0.06)";
+    ctx.fillRect(xOfU(uLead), 0, xOfU(uStart) - xOfU(uLead), H);
+  }
+  ctx.fillStyle = "rgba(255,165,0,0.12)";
+  ctx.fillRect(xOfU(uStart), 0, xOfU(uEnd) - xOfU(uStart), H);
+
+  // forma de onda
+  ctx.strokeStyle = "#9a9a9a";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let px = 0; px < W; px++) {
+    const u0 = uOfX(px), u1 = uOfX(px + 1);
+    if (u1 < 0 || u0 > dur) continue;
+    const b0 = Math.max(0, Math.floor(u0 / bucketDur));
+    const b1 = Math.min(mins.length - 1, Math.floor(u1 / bucketDur));
+    let lo = 1, hi = -1;
+    for (let b = b0; b <= b1; b++) { if (mins[b] < lo) lo = mins[b]; if (maxs[b] > hi) hi = maxs[b]; }
+    if (hi < lo) continue;
+    ctx.moveTo(px + 0.5, midY - hi * amp);
+    ctx.lineTo(px + 0.5, midY - lo * amp + 1);
+  }
+  ctx.stroke();
+
+  // onsets detectados (guías celestes)
+  ctx.strokeStyle = "rgba(90,200,255,0.45)";
+  for (const o of edData.audio.onsets) {
+    const x = xOfU(o);
+    if (x < 0 || x > W) continue;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 16); ctx.stroke();
+    ctx.save(); ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, H); ctx.stroke();
+    ctx.restore();
+  }
+
+  // líneas de compás de la partitura, mapeadas al audio
+  const ms = edData.measures;
+  const mSpacingPx = ms.length > 1 ? (vidToAud(ms[1].t) - vidToAud(ms[0].t)) * edZoom : 999;
+  ctx.textBaseline = "top"; ctx.font = "10px sans-serif";
+  for (let i = 0; i < ms.length; i++) {
+    const u = vidToAud(ms[i].t);
+    const x = xOfU(u);
+    if (x < -40 || x > W + 40) continue;
+    const pageChange = i > 0 && ms[i].page !== ms[i - 1].page;
+    if (i === 0) {
+      ctx.strokeStyle = "#ffa500"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      ctx.fillStyle = "#ffa500"; ctx.fillText("▶ compás 1", x + 4, 2);
+    } else if (pageChange) {
+      ctx.strokeStyle = "rgba(255,165,0,0.6)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      ctx.fillStyle = "rgba(255,165,0,0.8)"; ctx.fillText("pág " + ms[i].page, x + 3, 2);
+    } else if (mSpacingPx > 5) {
+      ctx.strokeStyle = "rgba(255,165,0,0.22)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, H * 0.15); ctx.lineTo(x, H); ctx.stroke();
+      if (mSpacingPx > 42 && (i % 4 === 0)) {
+        ctx.fillStyle = "rgba(255,165,0,0.55)"; ctx.fillText(String(i + 1), x + 3, H - 13);
+      }
+    }
+  }
+
+  // anclas
+  ctx.fillStyle = "#5ac8ff";
+  for (const a of edAnchors) {
+    const x = xOfU(a.u);
+    if (x < -10 || x > W + 10) continue;
+    ctx.beginPath(); ctx.moveTo(x, H - 14); ctx.lineTo(x - 6, H); ctx.lineTo(x + 6, H); ctx.fill();
+  }
+
+  // región de bucle
+  if (ed.loopChk.checked) {
+    ctx.fillStyle = "rgba(76,175,80,0.08)";
+    ctx.fillRect(xOfU(edLoopA), 0, xOfU(edLoopB) - xOfU(edLoopA), H);
+  }
+
+  // cursor de reproducción
+  const cx = xOfU(edAudio.currentTime);
+  if (cx >= 0 && cx <= W) {
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+  }
+}
+
+// ── lecturas de estado ───────────────────────────────────────────────────────
+function fmtTime(s) {
+  const neg = s < 0; s = Math.abs(s);
+  const m = Math.floor(s / 60), sec = (s - m * 60).toFixed(3).padStart(6, "0");
+  return (neg ? "-" : "") + m + ":" + sec;
+}
+
+function updateReadouts() {
+  ed.time.textContent = fmtTime(edAudio.currentTime || 0);
+  const tv = audToVid(edAudio.currentTime || 0);
+  const ms = edData.measures;
+  let lo = 0, hi = ms.length - 1;
+  if (tv < ms[0].t) { ed.mInd.textContent = leadIn() > 0 ? "· conteo previo" : "· antes del inicio"; }
+  else {
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t <= tv) lo = mid; else hi = mid - 1; }
+    if (tv > ms[ms.length - 1].t + ms[ms.length - 1].dur) ed.mInd.textContent = "· fin de la partitura";
+    else ed.mInd.textContent = "· compás " + (lo + 1) + " · pág " + ms[lo].page;
+  }
+  const effBpm = (edData.score_bpm / edK);
+  const pct = (1 / edK) * 100;
+  ed.tempo.innerHTML =
+    "Audio ≈ <b>" + effBpm.toFixed(1) + " BPM</b> (partitura: " + edData.score_bpm + " BPM · " +
+    pct.toFixed(2) + "%)" +
+    (Math.abs(edK - 1) > 0.0005
+      ? "<br>El video se retimará automáticamente al generar — el audio queda intacto."
+      : "<br>Tempos iguales: el video no se modifica.");
+}
+
+function renderAnchors() {
+  ed.anchList.innerHTML = "";
+  edAnchors.forEach((a, i) => {
+    const div = document.createElement("div");
+    div.className = "ed-anchor-item";
+    div.innerHTML = "&#9875; compás <b>" + (a.mi + 1) + "</b> &rarr; " + fmtTime(a.u) +
+      ' <button data-i="' + i + '" title="Quitar ancla">&times;</button>';
+    div.querySelector("button").addEventListener("click", () => {
+      edAnchors.splice(i, 1); refitK(); updateAll();
+    });
+    ed.anchList.appendChild(div);
+  });
+}
+
+function updateAll() { drawWave(); updateReadouts(); renderAnchors(); }
+
+// ── sincronía video ↔ audio en el preview ────────────────────────────────────
+function syncVideo(force) {
+  const target = Math.min(Math.max(audToVid(edAudio.currentTime), 0),
+                          Math.max(0, (ed.video.duration || edData.video_duration) - 0.05));
+  ed.video.playbackRate = Math.min(2, Math.max(0.5, 1 / edK));
+  if (force || Math.abs(ed.video.currentTime - target) > 0.06) ed.video.currentTime = target;
+}
+
+function tick() {
+  if (ed.loopChk.checked && edAudio.currentTime > edLoopB) edAudio.currentTime = edLoopA;
+  syncVideo(false);
+  drawWave(); updateReadouts();
+  if (!edAudio.paused) edRAF = requestAnimationFrame(tick);
+}
+
+ed.play.addEventListener("click", () => {
+  if (edAudio.paused) {
+    syncVideo(true);
+    edAudio.play(); ed.video.play().catch(() => {});
+    ed.play.innerHTML = "&#10074;&#10074; Pausar";
+    edRAF = requestAnimationFrame(tick);
+  } else {
+    edAudio.pause(); ed.video.pause();
+    ed.play.innerHTML = "&#9654; Reproducir";
+  }
+});
+edAudio.addEventListener("pause", () => { ed.video.pause(); ed.play.innerHTML = "&#9654; Reproducir"; });
+edAudio.addEventListener("ended", () => { ed.video.pause(); ed.play.innerHTML = "&#9654; Reproducir"; });
+
+ed.test.addEventListener("click", () => {
+  loopRegion();
+  ed.loopChk.checked = true;
+  edAudio.currentTime = edLoopA;
+  syncVideo(true);
+  if (edAudio.paused) ed.play.click(); else { edAudio.play(); ed.video.play().catch(() => {}); }
+});
+ed.loopChk.addEventListener("change", drawWave);
+
+// ── interacción con la forma de onda ─────────────────────────────────────────
+ed.wave.addEventListener("mousedown", e => {
+  const rect = ed.wave.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const u = uOfX(x);
+  const uL = edOffset - edK * leadIn(), uR = edOffset + edK * scoreDur();
+  edMoved = false; edDownX = x; edDownOffset = edOffset;
+  edDrag = (!e.shiftKey && u >= uL && u <= uR) ? "band" : "seek";
+  if (edDrag === "seek") seekTo(u);
+});
+window.addEventListener("mousemove", e => {
+  if (!edDrag) return;
+  const rect = ed.wave.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  if (Math.abs(x - edDownX) > 2) edMoved = true;
+  if (edDrag === "band" && edMoved) {
+    let cand = edDownOffset + (x - edDownX) / edZoom;
+    if (ed.snapChk.checked) {
+      const tolU = 12 / edZoom;   // imán: 12 px
+      let best = null, bestD = tolU;
+      for (const o of edData.audio.onsets) {
+        const d = Math.abs(o - cand);
+        if (d < bestD) { best = o; bestD = d; }
+      }
+      if (best !== null) cand = best;
+    }
+    setOffset(cand);
+  } else if (edDrag === "seek" && edMoved) {
+    seekTo(uOfX(x));
+  }
+});
+window.addEventListener("mouseup", () => { edDrag = null; });
+
+function seekTo(u) {
+  edAudio.currentTime = Math.min(Math.max(u, 0), edData.audio.duration - 0.01);
+  syncVideo(true);
+  drawWave(); updateReadouts();
+}
+
+ed.wave.addEventListener("wheel", e => {
+  e.preventDefault();
+  const rect = ed.wave.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const uAt = uOfX(x);
+  const factor = e.deltaY < 0 ? 1.3 : 1 / 1.3;
+  edZoom = Math.min(2000, Math.max(1, edZoom * factor));
+  edView = uAt - x / edZoom;
+  drawWave();
+}, { passive: false });
+
+// ── offset: input y nudges ───────────────────────────────────────────────────
+ed.offIn.addEventListener("change", () => {
+  const v = parseFloat(ed.offIn.value.replace(",", "."));
+  if (isFinite(v)) setOffset(v, true);
+  ed.offIn.value = edOffset.toFixed(3);
+});
+document.querySelectorAll(".ed-nudge").forEach(btn => {
+  btn.addEventListener("click", () => setOffset(edOffset + parseInt(btn.dataset.ms) / 1000));
+});
+
+document.addEventListener("keydown", e => {
+  if (!ed.el.classList.contains("visible")) return;
+  if (e.target === ed.offIn) return;
+  if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
+  else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    const step = (e.shiftKey ? 1 : e.ctrlKey || e.metaKey ? 100 : 10) / 1000;
+    setOffset(edOffset + (e.key === "ArrowRight" ? step : -step));
+  }
+  else if (e.key === "Home") { e.preventDefault(); seekTo(Math.max(0, edOffset - 1.5)); }
+});
+
+// ── anclas de tempo ──────────────────────────────────────────────────────────
+ed.anchBtn.addEventListener("click", () => {
+  const u = edAudio.currentTime;
+  const ms = edData.measures;
+  // compás sugerido: el más cercano al cursor según el mapeo actual
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < ms.length; i++) {
+    const d = Math.abs(vidToAud(ms[i].t) - u);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  const ans = prompt("¿Qué compás cae exactamente en este momento del audio?", String(best + 1));
+  if (ans === null) return;
+  const mi = Math.min(ms.length, Math.max(1, parseInt(ans) || best + 1)) - 1;
+  if (mi === 0) { setOffset(u); return; }   // "compás 1 acá" = mover el inicio
+  const idx = edAnchors.findIndex(a => a.mi === mi);
+  if (idx >= 0) edAnchors[idx].u = u; else edAnchors.push({ mi, u });
+  refitK(); updateAll();
+});
+ed.tempoRst.addEventListener("click", () => { edAnchors = []; edK = 1; updateAll(); });
+
+// ── finalizar ────────────────────────────────────────────────────────────────
+ed.finalize.addEventListener("click", async () => {
+  ed.finalize.disabled = true;
+  try {
+    const r = await fetch(`/finalize/${currentJobId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offset: edOffset, stretch: edK }),
+    });
+    const res = await r.json();
+    if (res.error) throw new Error(res.error);
+  } catch (err) {
+    showError("Error al iniciar la mezcla: " + err.message);
+    ed.finalize.disabled = false;
+    return;
+  }
+  closeEditor();
+  setProgress(5, "Mezclando audio y video…");
+  listenProgress(currentJobId);
+});
+
+ed.skip.addEventListener("click", () => {
+  closeEditor();
+  showDownload(currentJobId);   // el video mudo ya está listo como salida
+});
+
+window.addEventListener("resize", () => { if (edData) drawWave(); });
 </script>
 </body>
 </html>
