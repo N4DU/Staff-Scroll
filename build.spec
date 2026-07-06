@@ -13,6 +13,7 @@ a = Analysis(
         ('vendor',    'vendor'),
         ('score_engine.py',       '.'),
         ('musescore_pipeline.py', '.'),
+        ('audio_sync.py',         '.'),
     ],
     hiddenimports=[
         'flask',
