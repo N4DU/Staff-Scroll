@@ -38,6 +38,9 @@ DEFAULT_CONFIG = {
     "playhead_w":      3,
     "song_name":       "",     # se extrae de la partitura si está vacío
     "show_header":     True,
+    # Conteo previo: cantidad de pulsos (al tempo del primer compás) que se
+    # muestran antes de que arranque el scroll. 0 = sin conteo.
+    "count_in_beats":  0,
     # Rutas — se completan por trabajo, no confiar en los valores por defecto
     "mscx_dir":  None,
     "png_dir":   None,
@@ -193,8 +196,9 @@ def _extract_title(mscx_path):
     return ""
 
 
-def _load_fonts():
-    """Fuentes del encabezado, con candidatos para Linux, Windows y macOS."""
+def _load_fonts(count_size=140):
+    """Fuentes del encabezado y del conteo, con candidatos para Linux,
+    Windows y macOS. Devuelve (grande, chica, número_de_conteo)."""
     candidates = [
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -204,11 +208,13 @@ def _load_fonts():
     ]
     for bold, regular in candidates:
         try:
-            return ImageFont.truetype(bold, 22), ImageFont.truetype(regular, 17)
+            return (ImageFont.truetype(bold, 22),
+                    ImageFont.truetype(regular, 17),
+                    ImageFont.truetype(bold, count_size))
         except OSError:
             continue
     default = ImageFont.load_default()
-    return default, default
+    return default, default, default
 
 # ─── engine ───────────────────────────────────────────────────────────────────
 
@@ -310,6 +316,24 @@ class ScoreEngine:
 
         # Keyframes de scroll + línea de tiempo musical
         self._build_keyframes()
+
+        # ── Conteo previo: desplaza toda la música `lead_in` segundos ────────
+        # Los pulsos van al tempo real del primer compás, así el conteo ES la
+        # referencia exacta con la que arranca la partitura.
+        self.count_beats = max(0, min(16, int(cfg.get("count_in_beats", 0))))
+        self.lead_in = 0.0
+        if self.count_beats > 0:
+            qps0 = self.score_data[fn0]["measures"][0]["qps"]
+            lead = self.count_beats / qps0
+            self.lead_in = lead
+            self.keyframes = ([(0.0, self.keyframes[0][1])] +
+                              [(t + lead, y) for t, y in self.keyframes])
+            self._kf_times = [k[0] for k in self.keyframes]
+            self._timeline = [(t + lead, dur, fn, mi, b, bpm)
+                              for (t, dur, fn, mi, b, bpm) in self._timeline]
+            self._tl_times = [e[0] for e in self._timeline]
+            self._music_end_t += lead
+
         self._build_slopes()
         self.total_duration = self._music_end_t  # termina con la última nota
 
@@ -323,7 +347,8 @@ class ScoreEngine:
                 self._t_second_line = t
                 break
 
-        self._font_lg, self._font_sm = _load_fonts()
+        count_size = max(64, int(self.video_h * 0.30))
+        self._font_lg, self._font_sm, self._font_count = _load_fonts(count_size)
         self._hdr_cache = {}
         return self
 
@@ -537,6 +562,51 @@ class ScoreEngine:
         pad = 18
         ht = max(0, int(ct) - pad)
         hb = min(self.video_h, int(cb) + pad)
+
+        # ── Conteo previo ────────────────────────────────────────────────────
+        # Velo translúcido (la partitura sigue visible para pre-leer), número
+        # gigante que pulsa en cada tiempo y fila de puntos de progreso. En el
+        # último 40 % del último pulso todo se desvanece: cuando suena el
+        # primer compás la partitura está completamente limpia.
+        in_count = self.lead_in > 0 and time_s < self.lead_in
+        if in_count:
+            spb  = self.lead_in / self.count_beats
+            b    = min(self.count_beats - 1, int(time_s / spb))
+            bp   = (time_s - b * spb) / spb
+            fade = 1.0
+            if b == self.count_beats - 1 and bp > 0.6:
+                fade = max(0.0, 1.0 - (bp - 0.6) / 0.4)
+            veil = 0.45 * fade
+            if veil > 0.004:
+                frame[:] = (frame.astype(np.float32) * (1 - veil)
+                            + 255.0 * veil).astype(np.uint8)
+            f_pil = Image.fromarray(frame[..., ::-1])
+            d = ImageDraw.Draw(f_pil, "RGBA")
+            num_alpha = fade * (0.60 + 0.40 * max(0.0, 1.0 - bp * 3.0))
+            cx, cy = self.video_w // 2, int(self.video_h * 0.42)
+            txt = str(self.count_beats - b)
+            d.text((cx + 3, cy + 4), txt, font=self._font_count, anchor="mm",
+                   fill=(40, 40, 40, int(90 * num_alpha)))
+            d.text((cx, cy), txt, font=self._font_count, anchor="mm",
+                   fill=(255, 140, 0, int(255 * num_alpha)))
+            dr2, gap2 = 9, 36
+            y_dots = cy + int(self.video_h * 0.42 * 0.55)
+            x0d = cx - (self.count_beats * gap2) // 2
+            for i in range(self.count_beats):
+                cxd = x0d + i * gap2 + gap2 // 2
+                if i < b:
+                    col = (255, 140, 0, int(200 * fade))
+                    r_i = dr2
+                elif i == b:
+                    col = (255, 140, 0, int(255 * fade))
+                    r_i = dr2 + int(3 * max(0.0, 1.0 - bp * 2.0))
+                else:
+                    col = (150, 150, 150, int(140 * fade))
+                    r_i = dr2 - 2
+                d.ellipse([(cxd - r_i, y_dots - r_i), (cxd + r_i, y_dots + r_i)],
+                          fill=col)
+            frame = np.array(f_pil)[..., ::-1].copy()
+            return frame
 
         # ── Encabezado: aparece cuando empieza la segunda línea ──────────────
         h_prog = max(0.0, min(1.0, (time_s - self._t_second_line) / _FADE_DUR))
