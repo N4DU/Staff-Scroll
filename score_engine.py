@@ -148,8 +148,15 @@ def _parse_svg_layout(svg_path):
                 best, best_d = si, d
         bar_by_sys[best].append(bx)
 
+    # separación entre líneas del pentagrama: la escala de la página, usada
+    # por todos los umbrales geométricos
+    line_gap = (bottoms[0] - tops[0]) / 4.0 if bottoms[0] > tops[0] else 15.0
+
     # Límites de compás por sistema: [x0, x1, …] (len = compases + 1).
-    # Las barras dobles/de repetición son pares muy juntos → se fusionan.
+    # Las barras dobles/de repetición son pares cercanos (≈0.7 líneas) → se
+    # fusionan con umbral proporcional. Una barra pegada al inicio del
+    # sistema es la barra de repetición inicial dibujada tras la clave: NO es
+    # un límite de compás (crearía un compás fantasma en la zona de la clave).
     sys_bounds = []
     for si, xs_b in enumerate(bar_by_sys):
         if not xs_b:
@@ -157,26 +164,36 @@ def _parse_svg_layout(svg_path):
             break
         merged = []
         for x in sorted(xs_b):
-            if merged and x - merged[-1] < 12:
+            if merged and x - merged[-1] < line_gap * 0.9:
                 merged[-1] = (merged[-1] + x) / 2
             else:
                 merged.append(x)
-        bounds = [lefts[si]] + [x for x in merged if x > lefts[si] + 12]
-        if bounds[-1] < rights[si] - 12:
+        bounds = [lefts[si]] + [x for x in merged if x > lefts[si] + 8 * line_gap]
+        if bounds[-1] < rights[si] - line_gap:
             bounds.append(rights[si])
         sys_bounds.append(bounds)
 
     # ── Anclas de notas y silencios ──────────────────────────────────────────
-    # Cada cabeza de nota / silencio del SVG da un punto (x, y). Emparejados
-    # con los ataques del XML, permiten que el playhead caiga en la posición
-    # GRABADA de cada golpe (MuseScore no reparte los tiempos uniformemente:
-    # un pulso con semicorcheas ocupa más ancho que uno con silencio).
+    # Cada cabeza de nota / silencio del SVG da un punto (x, y): el CENTRO
+    # de su caja (el primer punto del trazo puede caer en cualquier borde del
+    # glifo). Emparejados con los ataques del XML, permiten que el playhead
+    # caiga en la posición GRABADA de cada golpe (MuseScore no reparte los
+    # tiempos uniformemente: un pulso con semicorcheas ocupa más ancho que
+    # uno con silencio).
     note_pts = []
     for tag_m in re.finditer(r'<[^>]*class="(?:Note|Rest)"[^>]*>', content):
         tag = tag_m.group(0)
-        c_m = re.search(r'(?:\bd="M|\bpoints=")\s*(-?[\d.]+)[,\s]+(-?[\d.]+)', tag)
-        if c_m:
-            note_pts.append((float(c_m.group(1)), float(c_m.group(2))))
+        geo = re.search(r'\b(?:d|points)="([^"]+)"', tag)
+        if not geo:
+            continue
+        nums = re.findall(r'-?\d+\.?\d*', geo.group(1))
+        if len(nums) < 2:
+            continue
+        xs_g = [float(v) for v in nums[0::2]]
+        ys_g = [float(v) for v in nums[1::2]]
+        note_pts.append(((min(xs_g) + max(xs_g)) / 2,
+                         (min(ys_g) + max(ys_g)) / 2))
+
 
     return {"w": w, "h": h,
             "tops":    tops,
@@ -185,6 +202,7 @@ def _parse_svg_layout(svg_path):
             "rights":  rights,
             "sys_bounds": sys_bounds,   # None si el SVG no trae barlines
             "note_pts": note_pts,
+            "line_gap": line_gap,
             "left_x":  min(x_vals) if x_vals else 0,
             "right_x": max(x_vals) if x_vals else w}
 
@@ -195,19 +213,41 @@ _DUR_BEATS = {"longa": 16, "breve": 8, "whole": 4, "half": 2, "quarter": 1,
               "128th": 0.03125}
 
 
+def _is_grace(chord_el):
+    """Apoyaturas/acciaccaturas: se dibujan pero no ocupan tiempo."""
+    for sub in chord_el:
+        if sub.tag in ("acciaccatura", "appoggiatura") or sub.tag.startswith("grace"):
+            return True
+    return False
+
+
 def _voice_onsets(voice_el, measure_beats):
     """Instantes de ataque (en negras desde el inicio del compás) de una voz.
 
-    Devuelve None si la voz no se puede interpretar con seguridad (tuplets,
-    duraciones desconocidas, o la suma no cierra con el compás) — en ese caso
-    el llamador cae a la aproximación uniforme.
+    Devuelve (onsets, duración_total) o None si la voz no se puede
+    interpretar con seguridad (tuplets, duraciones desconocidas, o se pasa
+    del largo del compás). Las voces PUEDEN ser más cortas que el compás
+    (MuseScore lo permite) y pueden saltar tiempo con <location>.
     """
     if voice_el.find('.//Tuplet') is not None:
         return None
     t, onsets = 0.0, []
     for ch in voice_el:
+        if ch.tag == "location":
+            # salto de cursor sin contenido: <location><fractions>1/4</fractions>
+            fr = ch.find("fractions")
+            if fr is None or not fr.text or "/" not in fr.text:
+                return None
+            try:
+                num, den = fr.text.split("/")
+                t += int(num) * 4.0 / int(den)
+            except (ValueError, ZeroDivisionError):
+                return None
+            continue
         if ch.tag not in ("Chord", "Rest"):
             continue
+        if ch.tag == "Chord" and _is_grace(ch):
+            continue                 # no ocupa tiempo
         dt_el = ch.find("durationType")
         if dt_el is None or not dt_el.text:
             return None
@@ -223,9 +263,9 @@ def _voice_onsets(voice_el, measure_beats):
             beats *= (2.0 - 0.5 ** nd)
         onsets.append(round(t, 4))
         t += beats
-    if not onsets or abs(t - measure_beats) > 1e-4:
+    if t > measure_beats + 1e-4:
         return None
-    return onsets
+    return onsets, t
 
 
 def _parse_score_xml(mscx_path):
@@ -277,15 +317,18 @@ def _parse_score_xml(mscx_path):
                 beats = int(num) * 4.0 / int(den)
             except (ValueError, ZeroDivisionError):
                 pass
-        # Ataques reales del compás (unión de todas las voces interpretables):
-        # con ellos el playhead cae en la posición grabada de cada golpe, no
-        # en una división uniforme del ancho.
-        onsets, ok = set(), False
+        # Ataques reales del compás (unión de las voces interpretables): con
+        # ellos el playhead cae en la posición grabada de cada golpe, no en
+        # una división uniforme del ancho. Se exige que al menos una voz
+        # cubra el compás completo (la principal); las demás pueden ser
+        # parciales.
+        onsets, covered = set(), 0.0
         for v in m.findall('voice'):
             vo = _voice_onsets(v, beats)
             if vo is not None:
-                onsets.update(vo)
-                ok = True
+                onsets.update(vo[0])
+                covered = max(covered, vo[1])
+        ok = bool(onsets) and covered >= beats - 1e-4
         infos.append({"beats": beats, "qps": qps,
                       "onsets": sorted(onsets) if ok else None})
 
@@ -354,6 +397,89 @@ def _load_fonts(count_size=140):
     default = ImageFont.load_default()
     return default, default, default
 
+def _match_onsets_to_columns(onsets, xs, beats, mx0, mx1, gap_px):
+    """Alineamiento monótono tolerante entre ataques (tiempo) y columnas (x).
+
+    1. Agrupa las x de cabezas/silencios en columnas (varias voces del mismo
+       ataque están alineadas; el umbral escala con el tamaño de página).
+    2. Normaliza ambos ejes a [0,1] y busca el emparejado monótono 1-a-1 de
+       máxima cantidad y mínimo error cuadrático (DP tipo alineamiento de
+       secuencias), permitiendo saltarse columnas o ataques sueltos.
+    3. Acepta solo si el error medio es chico; devuelve [(ataque, x)] con los
+       pares confiables — la interpolación cubre los ataques sin ancla.
+    """
+    # Con un solo ataque (silencio de compás entero) el reparto uniforme es
+    # lo correcto: no hay golpes que clavar y el glifo del silencio se dibuja
+    # centrado, no donde "suena".
+    if not xs or not onsets or len(onsets) < 2:
+        return None
+    cols, cur = [], [xs[0]]
+    for x in xs[1:]:
+        if x - cur[-1] < gap_px * 1.1:
+            cur.append(x)
+        else:
+            cols.append(cur)
+            cur = [x]
+    cols.append(cur)
+    cx = [sum(c) / len(c) for c in cols]
+
+    # Cuentas exactas → el emparejado 1:1 en orden es inambiguo (no dependen
+    # de distancias: cubre el primer compás del sistema, donde la clave y la
+    # cifra corren todas las columnas hacia la derecha).
+    if len(cx) == len(onsets):
+        return list(zip(onsets, cx))
+
+    span_x = max(mx1 - mx0, 1e-6)
+    po = [o / max(beats, 1e-6) for o in onsets]          # posición temporal 0..1
+    pc = [(x - mx0) / span_x for x in cx]                # posición gráfica 0..1
+
+    n, m = len(po), len(pc)
+    GATE = 0.28   # distancia máxima aceptable de un par (fracción del compás)
+    NEG = (-1, 0.0)
+    D = [[NEG] * (m + 1) for _ in range(n + 1)]
+    D[0][0] = (0, 0.0)
+    for i in range(n + 1):
+        for j in range(m + 1):
+            cur_best = D[i][j]
+            if cur_best[0] < 0:
+                continue
+            if j < m and D[i][j + 1] < cur_best:                 # columna sin usar
+                D[i][j + 1] = cur_best
+            if i < n and D[i + 1][j] < cur_best:                 # ataque sin ancla
+                D[i + 1][j] = cur_best
+            if i < n and j < m:
+                d = abs(po[i] - pc[j])
+                if d <= GATE:
+                    cand = (cur_best[0] + 1, cur_best[1] - d * d)
+                    if D[i + 1][j + 1] < cand:
+                        D[i + 1][j + 1] = cand
+    matched, score = D[n][m]
+    if matched < 1 or matched < len(po) * 0.5:
+        return None
+    # reconstrucción del camino (greedy hacia atrás sobre la misma DP)
+    pairs, i, j = [], n, m
+    while i > 0 and j > 0:
+        d = abs(po[i - 1] - pc[j - 1])
+        cand = None
+        if d <= GATE and D[i - 1][j - 1][0] >= 0:
+            cand = (D[i - 1][j - 1][0] + 1, D[i - 1][j - 1][1] - d * d)
+        if cand is not None and cand == D[i][j]:
+            pairs.append((onsets[i - 1], cx[j - 1]))
+            i, j = i - 1, j - 1
+        elif D[i][j] == D[i][j - 1]:
+            j -= 1
+        else:
+            i -= 1
+    pairs.reverse()
+    if not pairs:
+        return None
+    mean_err = sum(abs(o / max(beats, 1e-6) - (x - mx0) / span_x)
+                   for o, x in pairs) / len(pairs)
+    if mean_err > 0.15:
+        return None
+    return pairs
+
+
 # ─── engine ───────────────────────────────────────────────────────────────────
 
 class ScoreEngine:
@@ -405,33 +531,37 @@ class ScoreEngine:
             self.measure_map[fn] = mm
 
         # ── Mapa ataque→x por compás ─────────────────────────────────────────
-        # Empareja los ataques del XML con las columnas de notas del SVG (si
-        # las cuentas coinciden). Si un compás no se puede emparejar con
-        # seguridad, queda None y se usa el reparto uniforme.
+        # Empareja los ataques del XML con las columnas de notas del SVG
+        # mediante un alineamiento monótono tolerante: sobreviven columnas de
+        # sobra (apoyaturas, cabezas desplazadas) y ataques sin columna. Si
+        # un compás no alcanza la calidad mínima, queda None y se usa el
+        # reparto uniforme (nunca peor que antes).
         self.beat_x_map = {}
         for fn in file_nums:
             lay = self.layouts[fn]
             sd  = self.score_data[fn]
+            gap_px = lay.get("line_gap", 15.0)
+            n_sys = len(lay["tops"])
+            # Pertenencia vertical por sistema: cada sistema es dueño de la
+            # franja hasta el punto medio con el vecino (los platillos y el
+            # bombo se dibujan bien arriba/abajo del pentagrama).
+            sys_y = []
+            for si in range(n_sys):
+                y_lo = (0.0 if si == 0
+                        else (lay["bottoms"][si - 1] + lay["tops"][si]) / 2)
+                y_hi = (lay["h"] if si == n_sys - 1
+                        else (lay["bottoms"][si] + lay["tops"][si + 1]) / 2)
+                sys_y.append((y_lo, y_hi))
             maps = []
             for m_idx, (si, mx0, mx1) in enumerate(self.measure_map[fn]):
-                onsets = sd["measures"][m_idx].get("onsets")
+                info = sd["measures"][m_idx]
                 bmap = None
-                if onsets and lay.get("note_pts"):
-                    y_lo = lay["tops"][si] - 60
-                    y_hi = lay["bottoms"][si] + 60
+                if info.get("onsets") and lay.get("note_pts"):
+                    y_lo, y_hi = sys_y[si]
                     xs = sorted(x for x, y in lay["note_pts"]
-                                if mx0 - 3 <= x < mx1 - 3 and y_lo <= y <= y_hi)
-                    # columnas: notas de varias voces en el mismo ataque están
-                    # alineadas — fusionar x muy próximos
-                    cols = []
-                    for x in xs:
-                        if cols and x - cols[-1][-1] < 15:
-                            cols[-1].append(x)
-                        else:
-                            cols.append([x])
-                    if len(cols) == len(onsets):
-                        bmap = [(onsets[k], sum(cols[k]) / len(cols[k]))
-                                for k in range(len(cols))]
+                                if mx0 + 1 <= x < mx1 - 1 and y_lo <= y <= y_hi)
+                    bmap = _match_onsets_to_columns(
+                        info["onsets"], xs, info["beats"], mx0, mx1, gap_px)
                 maps.append(bmap)
             self.beat_x_map[fn] = maps
 
