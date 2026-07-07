@@ -93,10 +93,14 @@ def _extract_and_patch_mscz(mscz_path, mscx_dir):
             raise ValueError(f"No .mscx found inside {mscz_path}")
         content = z.read(mscx_members[0]).decode("utf-8")
 
-    # Patch version so MuseScore 3.2 accepts files saved by 3.6
-    content = re.sub(r'version="3\.\d+"', 'version="3.01"', content)
-    content = re.sub(r'<programVersion>[^<]+</programVersion>',
-                     '<programVersion>3.2.3</programVersion>', content)
+    # Solo los archivos de MuseScore 3 necesitan el parche de versión (para
+    # que 3.2 acepte lo guardado por 3.6). Los de MuseScore 4 se dejan
+    # intactos: los abre MuseScore 4 y tocarles programVersion es dañino.
+    ver = re.search(r'<museScore version="(\d+)\.', content)
+    if ver and ver.group(1) == "3":
+        content = re.sub(r'version="3\.\d+"', 'version="3.01"', content)
+        content = re.sub(r'<programVersion>[^<]+</programVersion>',
+                         '<programVersion>3.2.3</programVersion>', content)
 
     out_path = Path(mscx_dir) / mscx_name
     out_path.write_text(content, encoding="utf-8")
