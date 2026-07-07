@@ -166,14 +166,66 @@ def _parse_svg_layout(svg_path):
             bounds.append(rights[si])
         sys_bounds.append(bounds)
 
+    # ── Anclas de notas y silencios ──────────────────────────────────────────
+    # Cada cabeza de nota / silencio del SVG da un punto (x, y). Emparejados
+    # con los ataques del XML, permiten que el playhead caiga en la posición
+    # GRABADA de cada golpe (MuseScore no reparte los tiempos uniformemente:
+    # un pulso con semicorcheas ocupa más ancho que uno con silencio).
+    note_pts = []
+    for tag_m in re.finditer(r'<[^>]*class="(?:Note|Rest)"[^>]*>', content):
+        tag = tag_m.group(0)
+        c_m = re.search(r'(?:\bd="M|\bpoints=")\s*(-?[\d.]+)[,\s]+(-?[\d.]+)', tag)
+        if c_m:
+            note_pts.append((float(c_m.group(1)), float(c_m.group(2))))
+
     return {"w": w, "h": h,
             "tops":    tops,
             "bottoms": bottoms,
             "lefts":   lefts,
             "rights":  rights,
             "sys_bounds": sys_bounds,   # None si el SVG no trae barlines
+            "note_pts": note_pts,
             "left_x":  min(x_vals) if x_vals else 0,
             "right_x": max(x_vals) if x_vals else w}
+
+
+# Duración en negras de cada durationType de MuseScore
+_DUR_BEATS = {"longa": 16, "breve": 8, "whole": 4, "half": 2, "quarter": 1,
+              "eighth": 0.5, "16th": 0.25, "32nd": 0.125, "64th": 0.0625,
+              "128th": 0.03125}
+
+
+def _voice_onsets(voice_el, measure_beats):
+    """Instantes de ataque (en negras desde el inicio del compás) de una voz.
+
+    Devuelve None si la voz no se puede interpretar con seguridad (tuplets,
+    duraciones desconocidas, o la suma no cierra con el compás) — en ese caso
+    el llamador cae a la aproximación uniforme.
+    """
+    if voice_el.find('.//Tuplet') is not None:
+        return None
+    t, onsets = 0.0, []
+    for ch in voice_el:
+        if ch.tag not in ("Chord", "Rest"):
+            continue
+        dt_el = ch.find("durationType")
+        if dt_el is None or not dt_el.text:
+            return None
+        dt = dt_el.text.strip()
+        if dt == "measure":          # silencio de compás entero
+            beats = measure_beats
+        else:
+            beats = _DUR_BEATS.get(dt)
+            if beats is None:
+                return None
+            dots = ch.find("dots")
+            nd = int(dots.text) if dots is not None and dots.text else 0
+            beats *= (2.0 - 0.5 ** nd)
+        onsets.append(round(t, 4))
+        t += beats
+    if not onsets or abs(t - measure_beats) > 1e-4:
+        return None
+    return onsets
 
 
 def _parse_score_xml(mscx_path):
@@ -181,7 +233,9 @@ def _parse_score_xml(mscx_path):
 
     Devuelve:
       measures: lista por compás de {"beats": negras por compás, "qps": tempo
-                en negras/segundo o None si el compás no trae marca de tempo}
+                en negras/segundo o None si el compás no trae marca de tempo,
+                "onsets": instantes de ataque en negras (o None si no se pudo
+                interpretar el ritmo con seguridad)}
       played:   índices de compás en orden de reproducción (repeticiones expandidas)
     """
     with open(mscx_path, encoding="utf-8") as f:
@@ -212,7 +266,28 @@ def _parse_score_xml(mscx_path):
                 qps = float(tp.text)
             except ValueError:
                 pass
-        infos.append({"beats": sig_n * 4.0 / sig_d, "qps": qps})
+        beats = sig_n * 4.0 / sig_d
+        # Compás irregular (anacrusa / pickup): MuseScore guarda la duración
+        # real en el atributo len="N/D" — ignorarlo desincroniza todo lo que
+        # sigue, así que tiene prioridad sobre la cifra de compás.
+        len_attr = m.get("len")
+        if len_attr:
+            try:
+                num, den = len_attr.split("/")
+                beats = int(num) * 4.0 / int(den)
+            except (ValueError, ZeroDivisionError):
+                pass
+        # Ataques reales del compás (unión de todas las voces interpretables):
+        # con ellos el playhead cae en la posición grabada de cada golpe, no
+        # en una división uniforme del ancho.
+        onsets, ok = set(), False
+        for v in m.findall('voice'):
+            vo = _voice_onsets(v, beats)
+            if vo is not None:
+                onsets.update(vo)
+                ok = True
+        infos.append({"beats": beats, "qps": qps,
+                      "onsets": sorted(onsets) if ok else None})
 
     # Expansión de repeticiones. Un endRepeat sin startRepeat previo repite
     # desde el comienzo (o desde el final de la repetición anterior), igual
@@ -329,6 +404,37 @@ class ScoreEngine:
                         mm[m] = (si, l + pos * w_m, l + (pos + 1) * w_m)
             self.measure_map[fn] = mm
 
+        # ── Mapa ataque→x por compás ─────────────────────────────────────────
+        # Empareja los ataques del XML con las columnas de notas del SVG (si
+        # las cuentas coinciden). Si un compás no se puede emparejar con
+        # seguridad, queda None y se usa el reparto uniforme.
+        self.beat_x_map = {}
+        for fn in file_nums:
+            lay = self.layouts[fn]
+            sd  = self.score_data[fn]
+            maps = []
+            for m_idx, (si, mx0, mx1) in enumerate(self.measure_map[fn]):
+                onsets = sd["measures"][m_idx].get("onsets")
+                bmap = None
+                if onsets and lay.get("note_pts"):
+                    y_lo = lay["tops"][si] - 60
+                    y_hi = lay["bottoms"][si] + 60
+                    xs = sorted(x for x, y in lay["note_pts"]
+                                if mx0 - 3 <= x < mx1 - 3 and y_lo <= y <= y_hi)
+                    # columnas: notas de varias voces en el mismo ataque están
+                    # alineadas — fusionar x muy próximos
+                    cols = []
+                    for x in xs:
+                        if cols and x - cols[-1][-1] < 15:
+                            cols[-1].append(x)
+                        else:
+                            cols.append([x])
+                    if len(cols) == len(onsets):
+                        bmap = [(onsets[k], sum(cols[k]) / len(cols[k]))
+                                for k in range(len(cols))]
+                maps.append(bmap)
+            self.beat_x_map[fn] = maps
+
         # El tempo se hereda de página en página: cada archivo .mscz es una
         # hoja de la misma obra y normalmente solo la primera trae la marca.
         qps_cur = cfg["bpm"] / 60.0
@@ -399,7 +505,13 @@ class ScoreEngine:
         # Las páginas recortadas se apilan una a continuación de la otra: el
         # espacio entre pentagramas de páginas contiguas es exactamente el
         # margen que la brecha decidió conservar.
-        self.page_y_offsets = [0]
+        # El margen superior (playhead_y en blanco) permite que el PRIMER
+        # sistema arranque ya posicionado en la línea lectora: sin él, la
+        # vista queda clavada en el tope del lienzo al comienzo y la línea
+        # actual "cae" hasta engancharse — se veía como una desincronización
+        # que luego se corregía sola.
+        pad_top = self.playhead_y
+        self.page_y_offsets = [pad_top]
         for img in cropped_imgs[:-1]:
             self.page_y_offsets.append(self.page_y_offsets[-1] + img.size[1])
 
@@ -590,6 +702,24 @@ class ScoreEngine:
         i = bisect.bisect_right(self._tl_times, ts) - 1
         return self._timeline[max(0, min(i, len(self._timeline) - 1))]
 
+    def _measure_x_at(self, fn, mi, m_prog, beats, mx0, mx1):
+        """x del playhead dentro del compás (unidades SVG): interpola entre
+        las posiciones grabadas de los ataques; sin mapa, reparto uniforme."""
+        bmap = self.beat_x_map[fn][mi]
+        if not bmap:
+            return mx0 + m_prog * (mx1 - mx0)
+        bpos = m_prog * beats
+        if bpos <= bmap[0][0]:
+            return bmap[0][1]
+        pts = bmap + [(beats, mx1)]
+        for k in range(len(pts) - 1):
+            b0, x0 = pts[k]
+            b1, x1 = pts[k + 1]
+            if bpos <= b1:
+                f = (bpos - b0) / max(b1 - b0, 1e-9)
+                return x0 + f * (x1 - x0)
+        return mx1
+
     # ── encabezado ────────────────────────────────────────────────────────────
     def _header_strip(self, fn, bpm):
         """Barra de encabezado ya renderizada (BGR). Se cachea por página/tempo."""
@@ -729,13 +859,13 @@ class ScoreEngine:
         frame[strip_top:] = np.array(strip_pil)[:, :, ::-1]
 
         # ── Línea vertical de playhead ───────────────────────────────────────
-        # Usa el rango horizontal EXACTO del compás activo (de las barlines
-        # del SVG): compases de anchos desparejos ya no desvían la línea.
+        # Rango exacto del compás (barlines) + posiciones grabadas de cada
+        # ataque (mapa nota→x): la línea cae donde está el golpe de verdad.
         pw = cfg["playhead_w"]
         if pw > 0:
             sv   = self._svg_scale[fn]
-            vl_x = max(0, min(self.video_w - 1,
-                              int((mx0 + m_prog * (mx1 - mx0)) * sv)))
+            x_svg = self._measure_x_at(fn, mi, m_prog, beats, mx0, mx1)
+            vl_x = max(0, min(self.video_w - 1, int(x_svg * sv)))
             eff_hdr = int(_HEADER_H * h_prog) + 4
             vl_top  = max(eff_hdr, ht)
             vl_bot  = min(self.video_h - 1, hb)
