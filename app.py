@@ -334,12 +334,16 @@ def _build_editor_data(engine, analysis):
     for (t, dur, fn, mi, beats, bpm) in engine._timeline:
         si, x0, x1 = engine.measure_map[fn][mi]
         lay = engine.layouts[fn]
+        bmap = engine.beat_x_map[fn][mi]
         measures.append({
             "t": round(t - lead, 4), "dur": round(dur, 4),
             "page": fn, "beats": beats, "bpm": bpm,
             "x0": round(x0 / lay["w"], 4), "x1": round(x1 / lay["w"], 4),
             "y0": round(max(0.0, lay["tops"][si] - pad) / lay["h"], 4),
             "y1": round(min(lay["h"], lay["bottoms"][si] + pad) / lay["h"], 4),
+            # ataques reales: [posición en negras, x como fracción de la hoja]
+            "hx": ([[round(b, 4), round(x / lay["w"], 4)] for b, x in bmap]
+                   if bmap else None),
         })
     return {
         "song_name":      engine.song_name,
