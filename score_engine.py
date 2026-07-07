@@ -367,6 +367,7 @@ class ScoreEngine:
         gap = min(1.0, max(0.0, float(cfg["page_gap_pct"]) / 100.0))
         n_pages = len(file_nums)
         self._crop_top_svg = {}
+        self.page_px = {}      # dimensiones del PNG original de cada página
         cropped_imgs = []
         for idx, i in enumerate(file_nums):
             lay = self.layouts[i]
@@ -383,6 +384,7 @@ class ScoreEngine:
             raw = Image.open(f"{cfg['png_dir']}/{tpl.format(i=i)}-1.png").convert("RGBA")
             rgb = Image.fromarray(_compose_rgba(raw, cfg["score_bg"]))
             pw, ph = rgb.size
+            self.page_px[i] = (pw, ph)
             top_png = max(0,  int(round(top_svg * ph / lay["h"])))
             bot_png = min(ph, int(round(bot_svg * ph / lay["h"])))
             if bot_png <= top_png:

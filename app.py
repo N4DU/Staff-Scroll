@@ -133,14 +133,16 @@ def create_app():
 
     # ── rutas del editor de sincronización ───────────────────────────────────
 
-    @app.route("/video/<job_id>")
-    def preview_video(job_id):
+    @app.route("/page/<job_id>/<int:n>")
+    def score_page(job_id, n):
+        """Hoja original de la partitura (PNG renderizado por MuseScore)."""
         j = jobs.get(job_id)
-        if not j or not j.get("video_path") or not os.path.isfile(j["video_path"]):
-            return jsonify({"error": "Video no disponible"}), 404
-        # conditional=True habilita peticiones Range → el <video> puede hacer
-        # seek sin descargar el archivo entero.
-        return send_file(j["video_path"], mimetype="video/mp4", conditional=True)
+        if not j or not j.get("png_dir"):
+            return jsonify({"error": "Página no disponible"}), 404
+        path = os.path.join(j["png_dir"], f"{n}-score-1.png")
+        if not os.path.isfile(path):
+            return jsonify({"error": "Página no disponible"}), 404
+        return send_file(path, mimetype="image/png", conditional=True)
 
     @app.route("/audio/<job_id>")
     def preview_audio(job_id):
@@ -163,13 +165,13 @@ def create_app():
     @app.route("/finalize/<job_id>", methods=["POST"])
     def finalize(job_id):
         j = jobs.get(job_id)
-        if not j or not j.get("done") or j.get("error"):
+        if not j or not j.get("done") or j.get("error") or not j.get("render"):
             return jsonify({"error": "Job no está listo"}), 409
-        if not j.get("audio_path"):
-            return jsonify({"error": "Este job no tiene audio"}), 400
         data = request.get_json(force=True)
+        skip = bool(data.get("skip"))
         try:
-            offset  = max(-3600.0, min(3600.0, float(data.get("offset", 0.0))))
+            # offset negativo = la partitura empieza ANTES que el audio
+            offset  = max(-7200.0, min(7200.0, float(data.get("offset", 0.0))))
             stretch = max(0.5, min(2.0, float(data.get("stretch", 1.0))))
         except (TypeError, ValueError):
             return jsonify({"error": "Parámetros inválidos"}), 400
@@ -182,9 +184,9 @@ def create_app():
         j["error"] = None
         j["editor"] = False
         j["pct"] = 5
-        j["msg"] = "Preparando mezcla de audio…"
+        j["msg"] = "Preparando el video final…"
 
-        threading.Thread(target=_run_finalize, args=(job_id, offset, stretch),
+        threading.Thread(target=_run_finalize, args=(job_id, offset, stretch, skip),
                          daemon=True).start()
         return jsonify({"status": "iniciado"})
 
@@ -233,77 +235,32 @@ def _run_job(job_id, options):
         prog(81, "Construyendo motor de video…")
         engine = build_engine(engine_cfg)
 
-        fps      = engine_cfg.get("fps", 30)
-        n_frames = max(1, int(engine.total_duration * fps))
-        W, H     = engine.video_w, engine.video_h
-        out_path = os.path.join(workdir, "scrolling_score.mp4")
-
-        ffmpeg_bin = _find_ffmpeg()
-
-        cmd = [
-            ffmpeg_bin, "-y",
-            "-f", "rawvideo", "-vcodec", "rawvideo",
-            "-s", f"{W}x{H}", "-pix_fmt", "bgr24",
-            "-r", str(fps), "-i", "pipe:0",
-            "-vcodec", "libx264", "-preset", "fast",
-            "-crf", "18", "-pix_fmt", "yuv420p",
-            out_path,
-        ]
-
-        prog(82, f"Iniciando renderizado ({n_frames} frames, ~{int(engine.total_duration)}s de video)…")
-        # stderr va a un archivo: con stderr=PIPE sin lector, el buffer se
-        # llena y ffmpeg + este proceso quedan bloqueados (deadlock).
-        stderr_path = os.path.join(workdir, "ffmpeg_stderr.log")
-        with open(stderr_path, "wb") as errf:
-            pipe = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
-            try:
-                for i in range(n_frames):
-                    frame = engine.render_frame(i / fps)
-                    pipe.stdin.write(frame.tobytes())
-                    if i % max(1, n_frames // 50) == 0:
-                        pct = 83 + int((i / n_frames) * 16)
-                        prog(pct, f"Renderizando frame {i}/{n_frames}…")
-                pipe.stdin.close()
-            except BrokenPipeError:
-                pass  # ffmpeg murió a mitad de camino; el returncode lo dirá
-            pipe.wait()
-
-        if pipe.returncode != 0:
-            with open(stderr_path, encoding="utf-8", errors="replace") as f:
-                err = f.read()
-            raise RuntimeError(f"ffmpeg falló:\n{err[-600:]}")
-
-        j["output"]         = out_path
-        j["video_path"]     = out_path
-        j["video_duration"] = engine.total_duration
+        j["engine"]         = engine
+        j["fps"]            = engine_cfg.get("fps", 30)
+        j["png_dir"]        = engine_cfg["png_dir"]
         j["lead_in"]        = getattr(engine, "lead_in", 0.0)
+        j["video_duration"] = engine.total_duration
 
-        # Si hay audio: analizarlo y preparar los datos del editor de sync.
         if j.get("audio_path"):
-            prog(99, "Analizando el audio (forma de onda y golpes)…")
+            # Con audio: el editor abre YA (no necesita el video) y el render
+            # corre en segundo plano mientras el usuario alinea.
+            prog(85, "Analizando el audio (forma de onda y golpes)…")
             from audio_sync import analyze_audio
-            analysis = analyze_audio(ffmpeg_bin, j["audio_path"])
-            j["editor_data"] = {
-                "song_name":      engine.song_name,
-                "lead_in":        j["lead_in"],
-                "video_duration": engine.total_duration,
-                "score_bpm":      engine._timeline[0][5] if engine._timeline else 120,
-                # Un registro por compás reproducido: tiempo en el video,
-                # duración, página, índice de compás, pulsos y BPM. Esta es la
-                # ventaja del editor: conoce la música compás a compás.
-                "measures": [
-                    {"t": round(t, 4), "dur": round(dur, 4), "page": fn,
-                     "idx": mi, "beats": beats, "bpm": bpm}
-                    for (t, dur, fn, mi, beats, bpm) in engine._timeline
-                ],
-                "audio": analysis,
-            }
+            analysis = analyze_audio(_find_ffmpeg(), j["audio_path"])
+            j["editor_data"] = _build_editor_data(engine, analysis)
+            j["render"] = {"pct": 0, "done": False, "error": None, "path": None}
+            threading.Thread(target=_render_silent, args=(job_id,), daemon=True).start()
             j["editor"] = True
             j["pct"]  = 100
             j["msg"]  = "Partitura lista — abriendo editor de sincronización…"
             j["done"] = True
             return
 
+        # Sin audio: renderizar directo como siempre
+        out_path = _render_video_frames(
+            j, engine,
+            lambda p: prog(82 + int(p * 0.17), f"Renderizando video… ({p}%)"))
+        j["output"] = out_path
         j["pct"]    = 100
         j["msg"]    = "¡Video listo para descargar!"
         j["done"]   = True
@@ -315,8 +272,90 @@ def _run_job(job_id, options):
         j["done"]  = True
 
 
-def _run_finalize(job_id, offset, stretch):
-    """Mezcla el video mudo con el audio según la alineación del editor."""
+def _render_video_frames(j, engine, report):
+    """Renderiza el video mudo (frames → ffmpeg). report(pct 0-100)."""
+    fps      = j["fps"]
+    n_frames = max(1, int(engine.total_duration * fps))
+    W, H     = engine.video_w, engine.video_h
+    out_path = os.path.join(j["workdir"], "scrolling_score.mp4")
+
+    cmd = [
+        _find_ffmpeg(), "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{W}x{H}", "-pix_fmt", "bgr24",
+        "-r", str(fps), "-i", "pipe:0",
+        "-vcodec", "libx264", "-preset", "fast",
+        "-crf", "18", "-pix_fmt", "yuv420p",
+        out_path,
+    ]
+    # stderr va a un archivo: con stderr=PIPE sin lector, el buffer se llena
+    # y ffmpeg + este proceso quedan bloqueados (deadlock).
+    stderr_path = os.path.join(j["workdir"], "ffmpeg_stderr.log")
+    with open(stderr_path, "wb") as errf:
+        pipe = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
+        try:
+            for i in range(n_frames):
+                frame = engine.render_frame(i / fps)
+                pipe.stdin.write(frame.tobytes())
+                if i % max(1, n_frames // 100) == 0:
+                    report(int(i * 100 / n_frames))
+            pipe.stdin.close()
+        except BrokenPipeError:
+            pass  # ffmpeg murió a mitad de camino; el returncode lo dirá
+        pipe.wait()
+
+    if pipe.returncode != 0:
+        with open(stderr_path, encoding="utf-8", errors="replace") as f:
+            err = f.read()
+        raise RuntimeError(f"ffmpeg falló:\n{err[-600:]}")
+    return out_path
+
+
+def _render_silent(job_id):
+    """Render en segundo plano mientras el usuario usa el editor."""
+    j = jobs[job_id]
+    r = j["render"]
+    try:
+        r["path"] = _render_video_frames(j, j["engine"],
+                                         lambda p: r.__setitem__("pct", p))
+        r["pct"]  = 100
+        r["done"] = True
+    except Exception as exc:
+        r["error"] = str(exc)
+        r["done"]  = True
+
+
+def _build_editor_data(engine, analysis):
+    """Datos para el editor: compases con tiempo musical y geometría sobre la
+    hoja original (fracciones del PNG → independiente de la resolución)."""
+    lead = getattr(engine, "lead_in", 0.0)
+    pad = 25  # unidades SVG extra alrededor del sistema para el cursor
+    measures = []
+    for (t, dur, fn, mi, beats, bpm) in engine._timeline:
+        si, x0, x1 = engine.measure_map[fn][mi]
+        lay = engine.layouts[fn]
+        measures.append({
+            "t": round(t - lead, 4), "dur": round(dur, 4),
+            "page": fn, "beats": beats, "bpm": bpm,
+            "x0": round(x0 / lay["w"], 4), "x1": round(x1 / lay["w"], 4),
+            "y0": round(max(0.0, lay["tops"][si] - pad) / lay["h"], 4),
+            "y1": round(min(lay["h"], lay["bottoms"][si] + pad) / lay["h"], 4),
+        })
+    return {
+        "song_name":      engine.song_name,
+        "score_bpm":      engine._timeline[0][5] if engine._timeline else 120,
+        "lead_in":        round(lead, 4),
+        "count_beats":    getattr(engine, "count_beats", 0),
+        "music_duration": round(engine.total_duration - lead, 4),
+        "pages":          list(engine.cfg["file_nums"]),
+        "measures":       measures,
+        "audio":          analysis,
+    }
+
+
+def _run_finalize(job_id, offset, stretch, skip_audio):
+    """Espera el render en segundo plano y (si corresponde) mezcla el audio."""
+    import time
     from audio_sync import run_mux
 
     j = jobs[job_id]
@@ -326,18 +365,30 @@ def _run_finalize(job_id, offset, stretch):
         j["msg"] = msg
 
     try:
-        prog(10, "Mezclando audio y video…")
+        r = j["render"]
+        while not r["done"]:
+            prog(5 + int(r["pct"] * 0.75), f"Renderizando el video… ({r['pct']}%)")
+            time.sleep(0.3)
+        if r["error"]:
+            raise RuntimeError(r["error"])
+
+        if skip_audio:
+            j["output"] = r["path"]
+            prog(100, "¡Video listo para descargar!")
+            j["done"] = True
+            return
+
+        prog(85, "Mezclando audio y video…")
         final_path = os.path.join(j["workdir"], "scrolling_score_final.mp4")
         run_mux(
             _find_ffmpeg(),
-            video_path=j["video_path"],
+            video_path=r["path"],
             audio_path=j["audio_path"],
             out_path=final_path,
             offset=offset,
             stretch=stretch,
             lead_in=j.get("lead_in", 0.0),
             video_duration=j["video_duration"],
-            progress_cb=prog,
         )
         j["output"] = final_path
         j["pct"]  = 100
