@@ -968,6 +968,7 @@ const edAudio = new Audio();
 edAudio.preload = "auto";
 
 let edData = null;
+let edPageURLs = {};             // hojas precargadas como blobs (cambio instantáneo)
 let edS = 0, edA = 0;            // posiciones en pantalla (s): compás 1 y audio 0
 let edZoom = 10, edView = 0;     // px por segundo, inicio visible (s)
 let edDrag = null;               // null | {track:"score"|"song", x0, S0, A0} | {seek:true}
@@ -989,8 +990,16 @@ function openEditor(jobId) {
     edData = d;
     edS = 0; edA = 0; edCurPage = d.pages[0]; edFollow = true;
     edAudio.src = `/audio/${jobId}`;
-    // precargar todas las hojas
-    d.pages.forEach(p => { const im = new Image(); im.src = `/page/${jobId}/${p}`; });
+    // precargar todas las hojas como blobs en memoria → el cambio de página
+    // es instantáneo (sin volver a pedir el PNG al servidor)
+    edPageURLs = {};
+    d.pages.forEach(p => {
+      fetch(`/page/${jobId}/${p}`).then(r => r.ok ? r.blob() : null).then(bl => {
+        if (!bl) return;
+        edPageURLs[p] = URL.createObjectURL(bl);
+        if (p === edCurPage) showPage(p);   // refrescar con la copia local
+      }).catch(() => {});
+    });
     showPage(d.pages[0]);
     ed.song.textContent = d.song_name + " · " + d.measures.length +
       " compases · " + d.score_bpm + " BPM · audio " + fmtTime(d.audio.duration);
@@ -1008,6 +1017,8 @@ function closeEditor() {
   document.body.style.overflow = "";
   edAudio.pause();
   if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
+  Object.values(edPageURLs).forEach(u => URL.revokeObjectURL(u));
+  edPageURLs = {};
 }
 
 function fitAll() {
@@ -1022,7 +1033,8 @@ function fitAll() {
 // ── hoja de partitura + cursor por tiempos ───────────────────────────────────
 function showPage(p) {
   edCurPage = p;
-  ed.pageImg.src = `/page/${currentJobId}/${p}`;
+  const url = edPageURLs[p] || `/page/${currentJobId}/${p}`;
+  if (ed.pageImg.src !== url) ed.pageImg.src = url;
   ed.pageLbl.textContent = "Página " + p + " / " + edData.pages.length;
   ed.pageImg.onload = drawSheetCursor;
 }
@@ -1042,7 +1054,24 @@ function drawSheetCursor() {
   // cursor que SALTA de a tiempos: te parás exactamente sobre el golpe
   const nb = Math.max(1, Math.round(m.beats));
   const bi = Math.min(nb - 1, Math.max(0, Math.floor((tau - m.t) / m.dur * nb)));
-  const xf = m.x0 + (m.x1 - m.x0) * (bi / nb);
+  const bpos = bi * m.beats / nb;
+  // con el mapa de ataques reales (hx), el cursor cae en la posición GRABADA
+  // del golpe; sin mapa, reparto uniforme del ancho del compás
+  let xf;
+  if (m.hx && m.hx.length) {
+    xf = m.hx[0][1];
+    const pts = m.hx.concat([[m.beats, m.x1]]);
+    for (let k = 0; k < pts.length - 1; k++) {
+      if (bpos <= pts[k + 1][0] || k === pts.length - 2) {
+        if (bpos <= pts[0][0]) { xf = pts[0][1]; break; }
+        const f = (bpos - pts[k][0]) / Math.max(pts[k + 1][0] - pts[k][0], 1e-9);
+        xf = pts[k][1] + f * (pts[k + 1][1] - pts[k][1]);
+        break;
+      }
+    }
+  } else {
+    xf = m.x0 + (m.x1 - m.x0) * (bi / nb);
+  }
   const x  = xf * cv.width;
   ctx.strokeStyle = "rgba(255,165,0,0.95)";
   ctx.lineWidth = 3;
