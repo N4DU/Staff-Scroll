@@ -345,6 +345,11 @@ def _build_editor_data(engine, analysis):
             "hx": ([[round(b, 4), round(x / lay["w"], 4)] for b, x in bmap]
                    if bmap else None),
         })
+    # Relación ancho/alto de la hoja (píxeles del PNG) → el editor puede
+    # dimensionar el lienzo de la partitura antes de que la imagen decodifique,
+    # evitando saltos de layout al cambiar de página.
+    fn0 = engine.cfg["file_nums"][0]
+    pw0, ph0 = engine.page_px.get(fn0, (1, 1.4142))
     return {
         "song_name":      engine.song_name,
         "score_bpm":      engine._timeline[0][5] if engine._timeline else 120,
@@ -352,6 +357,7 @@ def _build_editor_data(engine, analysis):
         "count_beats":    getattr(engine, "count_beats", 0),
         "music_duration": round(engine.total_duration - lead, 4),
         "pages":          list(engine.cfg["file_nums"]),
+        "page_aspect":    round(pw0 / ph0, 5) if ph0 else 0.7071,
         "measures":       measures,
         "audio":          analysis,
     }

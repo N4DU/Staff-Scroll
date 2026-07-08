@@ -402,12 +402,12 @@ body {
   position: relative; height: 100%;
   display: flex; align-items: center; justify-content: center;
 }
-#edPageImg {
+#edSheet {
   max-height: 100%; max-width: 100%;
   border-radius: 6px; border: 1px solid var(--border);
   background: #fff; display: block;
+  cursor: pointer;
 }
-#edSheetOverlay { position: absolute; pointer-events: none; }
 .ed-page-nav {
   background: var(--surface); border: 1px solid var(--border);
   color: var(--text); border-radius: 8px; font-size: 1.4rem;
@@ -578,12 +578,13 @@ body {
     </div>
   </div>
 
-  <!-- hoja de partitura en grande, con el cursor amarillo por tiempos -->
+  <!-- hoja de partitura en grande, con el cursor amarillo por tiempos.
+       Un único canvas dibuja la hoja + el cursor de forma síncrona: el
+       cambio de página es instantáneo y no parpadea. -->
   <div class="ed-sheet-area">
     <button class="ed-page-nav" id="edPrevPage" type="button">&#8249;</button>
     <div class="ed-sheet-wrap">
-      <img id="edPageImg" alt="partitura">
-      <canvas id="edSheetOverlay"></canvas>
+      <canvas id="edSheet"></canvas>
       <div class="ed-page-label" id="edPageLabel"></div>
     </div>
     <button class="ed-page-nav" id="edNextPage" type="button">&#8250;</button>
@@ -608,9 +609,9 @@ body {
     </div>
     <canvas id="edTracks"></canvas>
     <div class="ed-wave-hint">
-      Arrastr&aacute; cada tira para alinearlas (la de arriba es la partitura, la de abajo la canci&oacute;n) &middot;
-      click = mover el cursor &middot; rueda = zoom &middot;
-      <kbd>Espacio</kbd> reproducir/pausar &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10ms (<kbd>Shift</kbd> = 1ms)
+      Arrastr&aacute; la tira de la <b style="color:var(--orange)">partitura</b> (arriba) o de la <b style="color:#5ac8ff">canci&oacute;n</b> (abajo) para alinearlas &middot;
+      arrastr&aacute; la <b>l&iacute;nea blanca</b> para moverla (se imanta a los tiempos) &middot; click = mover el cursor &middot; rueda = zoom &middot;
+      <kbd>Espacio</kbd> reproducir/pausar &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10ms (<kbd>Shift</kbd> = 1ms) &middot; <kbd>D</kbd> diagn&oacute;stico
     </div>
   </div>
 
@@ -945,8 +946,8 @@ function showError(msg) {
 // ═══════════════════════════════════════════════════════════════════════════
 const ed = {
   el:       document.getElementById("syncEditor"),
-  pageImg:  document.getElementById("edPageImg"),
-  overlay:  document.getElementById("edSheetOverlay"),
+  sheet:    document.getElementById("edSheet"),
+  sheetWrap:document.querySelector(".ed-sheet-wrap"),
   pageLbl:  document.getElementById("edPageLabel"),
   prevPage: document.getElementById("edPrevPage"),
   nextPage: document.getElementById("edNextPage"),
@@ -968,10 +969,11 @@ const edAudio = new Audio();
 edAudio.preload = "auto";
 
 let edData = null;
-let edPageURLs = {};             // hojas precargadas como blobs (cambio instantáneo)
+let edPageImgs = {};             // Image decodificada por página (dibujo síncrono)
+let edBeats = [];                // grilla de tiempos de pulso (música, s desde compás 1)
 let edS = 0, edA = 0;            // posiciones en pantalla (s): compás 1 y audio 0
 let edZoom = 10, edView = 0;     // px por segundo, inicio visible (s)
-let edDrag = null;               // null | {track:"score"|"song", x0, S0, A0} | {seek:true}
+let edDrag = null;               // arrastre activo (cursor | score | song)
 let edRAF = null;
 let edCurPage = 1;               // página mostrada en grande
 let edFollow = true;             // la página sigue la reproducción
@@ -981,27 +983,47 @@ const offset  = () => edS - edA;                    // para /finalize
 const beatDur = () => 60 / (edData ? edData.score_bpm : 120);
 const xOfSig  = s => (s - edView) * edZoom;
 const sigOfX  = x => edView + x / edZoom;
-const curSig  = () => edAudio.currentTime + edA;    // cursor en pantalla
-const curMusic = () => curSig() - edS;              // tiempo musical actual
+const curSig  = () => edAudio.currentTime + edA;    // cursor en pantalla (s)
+const curMusic = () => curSig() - edS;              // tiempo musical actual (s)
+
+// grilla de pulsos en tiempo musical (tempo-aware: usa la duración real de
+// cada compás, así los cambios de tempo no desalinean el imán)
+function buildBeatGrid() {
+  edBeats = [];
+  for (const m of edData.measures) {
+    const nb = Math.max(1, Math.round(m.beats));
+    for (let b = 0; b < nb; b++) edBeats.push(m.t + (b / nb) * m.dur);
+  }
+  const last = edData.measures[edData.measures.length - 1];
+  if (last) edBeats.push(last.t + last.dur);
+}
+// pulso (tiempo musical) más cercano a tau — búsqueda binaria
+function nearestBeat(tau) {
+  if (!edBeats.length) return tau;
+  let lo = 0, hi = edBeats.length - 1;
+  if (tau <= edBeats[0]) return edBeats[0];
+  if (tau >= edBeats[hi]) return edBeats[hi];
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (edBeats[mid] < tau) lo = mid + 1; else hi = mid; }
+  const a = edBeats[lo - 1], b = edBeats[lo];
+  return (tau - a) <= (b - tau) ? a : b;
+}
 
 // ── apertura / cierre ────────────────────────────────────────────────────────
 function openEditor(jobId) {
   currentJobId = jobId;
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
-    edS = 0; edA = 0; edCurPage = d.pages[0]; edFollow = true;
+    edS = 0; edA = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
     edAudio.src = `/audio/${jobId}`;
-    // precargar todas las hojas como blobs en memoria → el cambio de página
-    // es instantáneo (sin volver a pedir el PNG al servidor)
-    edPageURLs = {};
+    buildBeatGrid();
+    // precargar las hojas ya DECODIFICADAS → dibujarlas es síncrono y el
+    // cambio de página no parpadea ni se desincroniza
+    edPageImgs = {};
     d.pages.forEach(p => {
-      fetch(`/page/${jobId}/${p}`).then(r => r.ok ? r.blob() : null).then(bl => {
-        if (!bl) return;
-        edPageURLs[p] = URL.createObjectURL(bl);
-        if (p === edCurPage) showPage(p);   // refrescar con la copia local
-      }).catch(() => {});
+      const im = new Image();
+      im.onload = () => { edPageImgs[p] = im; if (p === edCurPage) drawSheet(); };
+      im.src = `/page/${jobId}/${p}`;
     });
-    showPage(d.pages[0]);
     ed.song.textContent = d.song_name + " · " + d.measures.length +
       " compases · " + d.score_bpm + " BPM · audio " + fmtTime(d.audio.duration);
     ed.el.classList.add("visible");
@@ -1018,8 +1040,7 @@ function closeEditor() {
   document.body.style.overflow = "";
   edAudio.pause();
   if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
-  Object.values(edPageURLs).forEach(u => URL.revokeObjectURL(u));
-  edPageURLs = {};
+  edPageImgs = {};
 }
 
 function fitAll() {
@@ -1031,61 +1052,68 @@ function fitAll() {
   drawTracks();
 }
 
-// ── hoja de partitura + cursor por tiempos ───────────────────────────────────
+// ── hoja de partitura (canvas único: hoja + cursor por tiempos) ──────────────
 function showPage(p) {
   edCurPage = p;
-  const url = edPageURLs[p] || `/page/${currentJobId}/${p}`;
-  if (ed.pageImg.src !== url) ed.pageImg.src = url;
-  ed.pageLbl.textContent = "Página " + p + " / " + edData.pages.length;
-  ed.pageImg.onload = drawSheetCursor;
+  drawSheet();
 }
 
-function drawSheetCursor() {
-  const img = ed.pageImg, cv = ed.overlay;
-  const r = img.getBoundingClientRect(), rw = img.parentElement.getBoundingClientRect();
-  cv.style.left = (r.left - rw.left) + "px";
-  cv.style.top  = (r.top  - rw.top)  + "px";
-  cv.width = r.width; cv.height = r.height;
+function drawSheet() {
+  if (!edData) return;
+  const cv = ed.sheet, wrap = ed.sheetWrap;
+  const img = edPageImgs[edCurPage];
+  const aspect = (img && img.naturalWidth)
+    ? img.naturalWidth / img.naturalHeight
+    : (edData.page_aspect || 0.7071);
+  // tamaño que entra en el área disponible conservando la proporción
+  const availW = Math.max(1, wrap.clientWidth);
+  const availH = Math.max(1, wrap.clientHeight);
+  let dw = availW, dh = dw / aspect;
+  if (dh > availH) { dh = availH; dw = dh * aspect; }
+  const dpr = window.devicePixelRatio || 1;
+  cv.style.width = dw + "px"; cv.style.height = dh + "px";
+  const bw = Math.round(dw * dpr), bh = Math.round(dh * dpr);
+  if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
   const ctx = cv.getContext("2d");
-  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, dw, dh);
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dw, dh);
+  if (img) ctx.drawImage(img, 0, 0, dw, dh);
 
-  // Modo diagnóstico (tecla D): dibuja lo que el motor detectó — límites de
-  // cada compás (azul), golpes mapeados (verde) o compás sin mapa (rojo).
-  // Si algo cae mal, una captura con esto activado muestra exactamente qué
-  // "vio" el programa.
+  ed.pageLbl.textContent = "Página " + edCurPage + " / " + edData.pages.length;
+
+  // Modo diagnóstico (tecla D): límites de compás (azul), golpes mapeados
+  // (verde), compás sin mapa (rojo).
   if (edDiag) {
     ctx.font = "11px sans-serif"; ctx.textBaseline = "top";
     edData.measures.forEach((mm, i) => {
       if (mm.page !== edCurPage) return;
-      const y0 = mm.y0 * cv.height, y1 = mm.y1 * cv.height;
+      const y0 = mm.y0 * dh, y1 = mm.y1 * dh;
       ctx.strokeStyle = "rgba(60,120,255,0.7)"; ctx.lineWidth = 1.5;
       for (const xf of [mm.x0, mm.x1]) {
-        ctx.beginPath(); ctx.moveTo(xf * cv.width, y0); ctx.lineTo(xf * cv.width, y1); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(xf * dw, y0); ctx.lineTo(xf * dw, y1); ctx.stroke();
       }
       ctx.fillStyle = "rgba(60,120,255,0.9)";
-      ctx.fillText(String(i + 1), mm.x0 * cv.width + 2, y0);
+      ctx.fillText(String(i + 1), mm.x0 * dw + 2, y0);
       if (mm.hx) {
         ctx.fillStyle = "rgba(0,170,60,0.85)";
         for (const [b, xf] of mm.hx) {
-          const x = xf * cv.width, ym = (y0 + y1) / 2;
-          ctx.beginPath(); ctx.arc(x, ym, 4, 0, 7); ctx.fill();
+          ctx.beginPath(); ctx.arc(xf * dw, (y0 + y1) / 2, 4, 0, 7); ctx.fill();
         }
       } else {
         ctx.strokeStyle = "rgba(230,40,40,0.8)";
-        ctx.strokeRect(mm.x0 * cv.width, y0, (mm.x1 - mm.x0) * cv.width, y1 - y0);
+        ctx.strokeRect(mm.x0 * dw, y0, (mm.x1 - mm.x0) * dw, y1 - y0);
       }
     });
   }
 
+  // cursor amarillo: salta de a tiempos, sobre la posición GRABADA del golpe
   const tau = curMusic();
   const m = measureAt(tau);
   if (!m || m.page !== edCurPage) return;
-  // cursor que SALTA de a tiempos: te parás exactamente sobre el golpe
   const nb = Math.max(1, Math.round(m.beats));
   const bi = Math.min(nb - 1, Math.max(0, Math.floor((tau - m.t) / m.dur * nb)));
   const bpos = bi * m.beats / nb;
-  // con el mapa de ataques reales (hx), el cursor cae en la posición GRABADA
-  // del golpe; sin mapa, reparto uniforme del ancho del compás
   let xf;
   if (m.hx && m.hx.length) {
     xf = m.hx[0][1];
@@ -1101,12 +1129,12 @@ function drawSheetCursor() {
   } else {
     xf = m.x0 + (m.x1 - m.x0) * (bi / nb);
   }
-  const x  = xf * cv.width;
+  const x = xf * dw;
   ctx.strokeStyle = "rgba(255,165,0,0.95)";
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(x, m.y0 * cv.height);
-  ctx.lineTo(x, m.y1 * cv.height);
+  ctx.moveTo(x, m.y0 * dh);
+  ctx.lineTo(x, m.y1 * dh);
   ctx.stroke();
 }
 
@@ -1116,6 +1144,12 @@ function measureAt(tau) {
   let lo = 0, hi = ms.length - 1;
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t <= tau) lo = mid; else hi = mid - 1; }
   return ms[lo];
+}
+
+// página del compás activo (para navegación manual y auto-follow)
+function activePage() {
+  const m = measureAt(curMusic());
+  return m ? m.page : edCurPage;
 }
 
 ed.prevPage.addEventListener("click", () => {
@@ -1135,7 +1169,9 @@ const TRK = { scoreY: 6, scoreH: 54, songY: 68, songH: 84 };
 function resizeTracks() {
   const dpr = window.devicePixelRatio || 1;
   const w = ed.tracks.clientWidth, h = ed.tracks.clientHeight;
-  if (ed.tracks.width !== w * dpr) { ed.tracks.width = w * dpr; ed.tracks.height = h * dpr; }
+  if (ed.tracks.width !== Math.round(w * dpr)) {
+    ed.tracks.width = Math.round(w * dpr); ed.tracks.height = Math.round(h * dpr);
+  }
 }
 
 function drawTracks() {
@@ -1162,14 +1198,12 @@ function drawTracks() {
     const wMeas = ms[i].dur * edZoom;
     if (x + wMeas < 0 || x > W) continue;
     const pageChange = i > 0 && ms[i].page !== ms[i - 1].page;
-    // línea de compás
     ctx.strokeStyle = i === 0 ? "#ffa500" : pageChange ? "rgba(255,165,0,0.85)" : "rgba(255,165,0,0.45)";
     ctx.lineWidth = i === 0 || pageChange ? 2 : 1;
     ctx.beginPath(); ctx.moveTo(x, sy); ctx.lineTo(x, sy + sh); ctx.stroke();
     if (i === 0) { ctx.fillStyle = "#ffa500"; ctx.fillText("compás 1", x + 3, sy + 2); }
     else if (pageChange) { ctx.fillStyle = "rgba(255,165,0,0.9)"; ctx.fillText("pág " + ms[i].page, x + 3, sy + 2); }
     else if (wMeas > 34 && i % 4 === 0) { ctx.fillStyle = "rgba(255,165,0,0.6)"; ctx.fillText(String(i + 1), x + 3, sy + 2); }
-    // tiempos (pulsos) dentro del compás
     if (wMeas > 14) {
       const nb = Math.max(1, Math.round(ms[i].beats));
       ctx.strokeStyle = "rgba(255,165,0,0.22)"; ctx.lineWidth = 1;
@@ -1189,23 +1223,24 @@ function drawTracks() {
   ctx.fillRect(xOfSig(edA), ay, edData.audio.duration * edZoom, ah);
   const dur = edData.audio.duration;
   const mins = edData.audio.waveform.mins, maxs = edData.audio.waveform.maxs;
-  const bucketDur = dur / mins.length;
-  const midY = ay + ah * 0.55, amp = ah * 0.42;
-  ctx.strokeStyle = "#a8a8a8"; ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let px = 0; px < W; px++) {
-    const u0 = sigOfX(px) - edA, u1 = sigOfX(px + 1) - edA;
-    if (u1 < 0 || u0 > dur) continue;
-    const b0 = Math.max(0, Math.floor(u0 / bucketDur));
-    const b1 = Math.min(mins.length - 1, Math.floor(u1 / bucketDur));
-    let lo = 1, hi = -1;
-    for (let b = b0; b <= b1; b++) { if (mins[b] < lo) lo = mins[b]; if (maxs[b] > hi) hi = maxs[b]; }
-    if (hi < lo) continue;
-    ctx.moveTo(px + 0.5, midY - hi * amp);
-    ctx.lineTo(px + 0.5, midY - lo * amp + 1);
+  if (mins.length) {
+    const bucketDur = dur / mins.length;
+    const midY = ay + ah * 0.55, amp = ah * 0.42;
+    ctx.strokeStyle = "#a8a8a8"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let px = 0; px < W; px++) {
+      const u0 = sigOfX(px) - edA, u1 = sigOfX(px + 1) - edA;
+      if (u1 < 0 || u0 > dur) continue;
+      const b0 = Math.max(0, Math.floor(u0 / bucketDur));
+      const b1 = Math.min(mins.length - 1, Math.floor(u1 / bucketDur));
+      let lo = 1, hi = -1;
+      for (let b = b0; b <= b1; b++) { if (mins[b] < lo) lo = mins[b]; if (maxs[b] > hi) hi = maxs[b]; }
+      if (hi < lo) continue;
+      ctx.moveTo(px + 0.5, midY - hi * amp);
+      ctx.lineTo(px + 0.5, midY - lo * amp + 1);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
-  // golpes detectados en la canción (guías finas)
   ctx.strokeStyle = "rgba(90,200,255,0.4)";
   for (const o of edData.audio.onsets) {
     const x = xOfSig(edA + o);
@@ -1218,9 +1253,13 @@ function drawTracks() {
 
   // ── cursor de reproducción (cruza ambas tiras) ──
   const cx = xOfSig(curSig());
-  if (cx >= 0 && cx <= W) {
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+  if (cx >= -1 && cx <= W + 1) {
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+    // tirador (para indicar que se puede arrastrar)
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(cx - 5, 0); ctx.lineTo(cx + 5, 0); ctx.lineTo(cx, 7); ctx.fill();
   }
 }
 
@@ -1243,9 +1282,13 @@ function updateReadouts() {
 }
 
 function updateAll() {
-  drawTracks(); updateReadouts(); drawSheetCursor();
-  const m = measureAt(curMusic());
-  if (edFollow && m && m.page !== edCurPage) showPage(m.page);
+  // fijar la página activa ANTES de dibujar → el cambio de hoja y el cursor
+  // quedan siempre consistentes (nunca un frame con la página vieja)
+  if (edFollow) {
+    const ap = activePage();
+    if (ap !== edCurPage) edCurPage = ap;
+  }
+  drawTracks(); updateReadouts(); drawSheet();
 }
 
 // ── reproducción (sin <video>: pausa y cursor instantáneos) ──────────────────
@@ -1279,31 +1322,57 @@ ed.testEnd.addEventListener("click", () => {
   playFromSig(Math.max(edS + edData.music_duration - 8, edA));
 });
 
+// ── colocar el cursor en un tiempo (s en pantalla), con imán a los pulsos ─────
+function seekToSig(sig, magnet) {
+  if (magnet && ed.snap.checked) sig = edS + nearestBeat(sig - edS);
+  edAudio.currentTime = Math.min(Math.max(sig - edA, 0), edData.audio.duration - 0.1);
+}
+
 // ── interacción con las tiras ────────────────────────────────────────────────
+// Tres cosas arrastrables: el CURSOR blanco (si agarrás cerca de él), la tira
+// de PARTITURA (arriba) o la de CANCIÓN (abajo).
 ed.tracks.addEventListener("mousedown", e => {
   if (!edData) return;
   const rect = ed.tracks.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  edDrag = { x0: x, S0: edS, A0: edA, sig0: curSig(), moved: false,
-             track: y < (TRK.scoreY + TRK.scoreH + TRK.songY) / 2 ? "score" : "song" };
+  const cx = xOfSig(curSig());
+  let kind;
+  if (Math.abs(x - cx) <= 7) kind = "cursor";                 // agarrar la línea blanca
+  else kind = y < (TRK.scoreY + TRK.scoreH + TRK.songY) / 2 ? "score" : "song";
+  edDrag = { kind, x0: x, S0: edS, A0: edA, sig0: curSig(), moved: false };
   ed.tracks.classList.add("dragging");
+  e.preventDefault();
 });
 window.addEventListener("mousemove", e => {
   if (!edDrag) return;
   const rect = ed.tracks.getBoundingClientRect();
-  const dx = (e.clientX - rect.left) - edDrag.x0;
-  if (Math.abs(dx) > 3) edDrag.moved = true;
+  const x = e.clientX - rect.left;
+  const dx = x - edDrag.x0;
+  if (Math.abs(dx) > 2) edDrag.moved = true;
   if (!edDrag.moved) return;
   const dSec = dx / edZoom;
-  if (edDrag.track === "score") {
-    // la partitura se mueve DE A TIEMPOS (saltitos exactos) salvo que se
-    // apague; el cursor blanco queda anclado a la CANCIÓN (no se toca).
-    edS = ed.snap.checked
-      ? edDrag.S0 + Math.round(dSec / beatDur()) * beatDur()
-      : edDrag.S0 + dSec;
+
+  if (edDrag.kind === "cursor") {
+    // deslizar la línea blanca; con imán se pega al pulso más cercano
+    seekToSig(sigOfX(x), true);
+  } else if (edDrag.kind === "score") {
+    // mover la partitura; con imán, un pulso de la partitura cae EXACTO sobre
+    // el cursor (así la línea blanca queda encima de una línea de tiempo)
+    const cand = edDrag.S0 + dSec;
+    if (ed.snap.checked && edBeats.length) {
+      const cs = edDrag.sig0;             // el cursor no se mueve al arrastrar la partitura
+      let best = cand, bestD = Infinity;
+      for (const bt of edBeats) {
+        const s = cs - bt;                // edS que pone ese pulso bajo el cursor
+        const d = Math.abs(s - cand);
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      edS = best;
+    } else {
+      edS = cand;
+    }
   } else {
-    // la canción se desliza libre; el cursor blanco queda anclado a la
-    // PARTITURA: se recoloca el audio para que el cursor no se mueva.
+    // la canción se desliza libre; el cursor queda anclado a la PARTITURA
     edA = edDrag.A0 + dSec;
     edAudio.currentTime = Math.min(Math.max(edDrag.sig0 - edA, 0),
                                    edData.audio.duration - 0.1);
@@ -1313,13 +1382,13 @@ window.addEventListener("mousemove", e => {
 window.addEventListener("mouseup", e => {
   if (!edDrag) return;
   ed.tracks.classList.remove("dragging");
-  const wasClick = !edDrag.moved;
+  const wasClick = !edDrag.moved, kind = edDrag.kind;
   edDrag = null;
   if (wasClick && edData) {
+    // click simple: mover el cursor ahí (con imán a los pulsos)
     const rect = ed.tracks.getBoundingClientRect();
     edFollow = true;
-    edAudio.currentTime = Math.min(Math.max(sigOfX(e.clientX - rect.left) - edA, 0),
-                                   edData.audio.duration - 0.1);
+    seekToSig(sigOfX(e.clientX - rect.left), true);
     updateAll();
   }
 });
@@ -1350,7 +1419,7 @@ document.addEventListener("keydown", e => {
   }
   else if (e.key === "d" || e.key === "D") {
     edDiag = !edDiag;
-    drawSheetCursor();
+    drawSheet();
   }
 });
 
@@ -1378,7 +1447,7 @@ async function submitFinalize(body) {
 ed.finalize.addEventListener("click", () => submitFinalize({ offset: offset(), stretch: 1.0 }));
 ed.skip.addEventListener("click",     () => submitFinalize({ skip: true }));
 
-window.addEventListener("resize", () => { if (edData) { drawTracks(); drawSheetCursor(); } });
+window.addEventListener("resize", () => { if (edData) { drawTracks(); drawSheet(); } });
 </script>
 </body>
 </html>
