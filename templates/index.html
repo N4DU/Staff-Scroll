@@ -1039,7 +1039,6 @@ let edSheetKey = "";
 let edSheetLayout = null;         // {ox, oy, pw, ph, cvW, cvH}
 let edPageBitmaps = {};           // banda de música pre-escalada (por página)
 let edFitKey = "";                // tamaño/dpr con que se pre-escalaron las hojas
-let edPageBand = {};              // franja vertical con música (fracciones), por página
 let edTracksBg = document.createElement("canvas");
 let edTracksKey = "";
 
@@ -1078,7 +1077,7 @@ function openEditor(jobId) {
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     buildBeatGrid();
-    edPageImgs = {}; edPageBitmaps = {}; edFitKey = ""; edPageBand = {};
+    edPageImgs = {}; edPageBitmaps = {}; edFitKey = "";
     d.pages.forEach(p => {
       const im = new Image();
       im.onload = () => {
@@ -1129,19 +1128,17 @@ function clampSheetPan(pw, ph, availW, availH) {
   else edSheetPanY = Math.max((availH - ph) / 2, Math.min((ph - availH) / 2, edSheetPanY));
 }
 
-// Banda con MÚSICA de una página (fracciones verticales). Las hojas de
-// MuseScore son papel vertical casi todo en blanco: mostrar sólo la franja
-// de los pentagramas hace que la música se vea lo más grande posible (y el
-// modo pantalla completa cobre sentido). Con un pequeño margen arriba/abajo.
+// Franja vertical de la hoja que se muestra (fracciones de página).
+//  · Vista NORMAL: la hoja COMPLETA (vertical, tal cual el original).
+//  · PANTALLA COMPLETA: se conserva desde el borde superior (título/tempo
+//    incluidos → se respeta la partitura original) y sólo se recorta el
+//    blanco sobrante DEBAJO del último sistema, para agrandar la música.
 function bandOf(p) {
-  if (edPageBand[p]) return edPageBand[p];
-  let lo = 1, hi = 0;
-  for (const m of edData.measures) if (m.page === p) { lo = Math.min(lo, m.y0); hi = Math.max(hi, m.y1); }
-  if (hi <= lo) { lo = 0; hi = 1; }
-  const pad = (hi - lo) * 0.05;
-  const band = [Math.max(0, lo - pad), Math.min(1, hi + pad)];
-  edPageBand[p] = band;
-  return band;
+  if (!ed.el.classList.contains("sheet-max")) return [0, 1];
+  let hi = 0;
+  for (const m of edData.measures) if (m.page === p) hi = Math.max(hi, m.y1);
+  if (hi <= 0) return [0, 1];
+  return [0, Math.min(1, hi + 0.03)];
 }
 
 // dimensiones "contain" de la BANDA de música en el área disponible (zoom 1)
