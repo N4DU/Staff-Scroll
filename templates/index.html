@@ -211,6 +211,15 @@ body {
   color: var(--text);
 }
 .opt-desc { font-size: 0.8rem; color: var(--muted); }
+.text-input {
+  width: 100%; padding: 9px 11px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); font-size: 0.9rem;
+}
+.text-input:focus { outline: none; border-color: var(--orange); }
+.text-input::placeholder { color: var(--muted); }
+/* al desactivar el encabezado, el nombre no aplica */
+.options-panel.no-header #songNameRow { opacity: 0.4; pointer-events: none; }
 
 /* Checkbox */
 .checkbox-row {
@@ -400,6 +409,7 @@ body {
 }
 .ed-sheet-wrap {
   position: relative; height: 100%;
+  flex: 1; min-width: 0;   /* llena el ancho disponible (rompe la dependencia circular con el canvas) */
   display: flex; align-items: center; justify-content: center;
 }
 #edSheet {
@@ -419,6 +429,11 @@ body {
 }
 .ed-sheet-btn:hover { border-color: var(--orange); color: var(--orange); }
 .sync-editor:fullscreen { padding: 12px 18px 14px; }
+/* modo "partitura al máximo": oculta barra superior y controles/tiras, la
+   hoja usa TODA la pantalla (escalada por altura) */
+.sync-editor.sheet-max { padding: 6px; gap: 0; }
+.sync-editor.sheet-max .ed-top,
+.sync-editor.sheet-max .ed-bottom { display: none; }
 .ed-page-nav {
   background: var(--surface); border: 1px solid var(--border);
   color: var(--text); border-radius: 8px; font-size: 1.4rem;
@@ -513,6 +528,12 @@ body {
           <span class="opt-desc">Barra con nombre de la canción y BPM</span>
         </span>
       </label>
+
+      <div class="opt-row" id="songNameRow">
+        <div class="opt-label">Nombre de la canción</div>
+        <div class="opt-desc">Aparece centrado en el encabezado del video. Si lo dejás vacío se intenta tomar el título de la partitura.</div>
+        <input type="text" id="optSongName" class="text-input" placeholder="Nombre de la canción…" maxlength="80">
+      </div>
 
       <label class="checkbox-row">
         <input type="checkbox" id="optPlayhead" checked>
@@ -652,6 +673,7 @@ const fileList       = document.getElementById("fileList");
 const optToggle      = document.getElementById("optionsToggle");
 const optPanel       = document.getElementById("optionsPanel");
 const optHeader      = document.getElementById("optHeader");
+const optSongName    = document.getElementById("optSongName");
 const optPlayhead    = document.getElementById("optPlayhead");
 const optPageGap     = document.getElementById("optPageGap");
 const optPageGapVal  = document.getElementById("optPageGapVal");
@@ -806,6 +828,11 @@ optPageGap.addEventListener("input", () => {
   optPageGapVal.textContent = optPageGap.value + " %";
 });
 
+// atenuar el nombre de la canción cuando el encabezado está desactivado
+optHeader.addEventListener("change", () => {
+  optPanel.classList.toggle("no-header", !optHeader.checked);
+});
+
 const optCountIn    = document.getElementById("optCountIn");
 const optCountInVal = document.getElementById("optCountInVal");
 optCountIn.addEventListener("input", () => {
@@ -854,6 +881,7 @@ btnGenerate.addEventListener("click", async () => {
     page_gap_pct:      parseInt(optPageGap.value),
     playhead_frac:     parseInt(optFrac.value) / 100,
     count_in_beats:    parseInt(optCountIn.value),
+    song_name:         optSongName.value.trim(),
   };
 
   try {
@@ -1009,8 +1037,9 @@ let edSheetDrag = null;
 let edSheetBg = document.createElement("canvas");
 let edSheetKey = "";
 let edSheetLayout = null;         // {ox, oy, pw, ph, cvW, cvH}
-let edPageBitmaps = {};           // hoja pre-escalada a tamaño de pantalla (por página)
+let edPageBitmaps = {};           // banda de música pre-escalada (por página)
 let edFitKey = "";                // tamaño/dpr con que se pre-escalaron las hojas
+let edPageBand = {};              // franja vertical con música (fracciones), por página
 let edTracksBg = document.createElement("canvas");
 let edTracksKey = "";
 
@@ -1049,14 +1078,12 @@ function openEditor(jobId) {
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     buildBeatGrid();
-    edPageImgs = {}; edPageBitmaps = {}; edFitKey = "";
+    edPageImgs = {}; edPageBitmaps = {}; edFitKey = ""; edPageBand = {};
     d.pages.forEach(p => {
       const im = new Image();
       im.onload = () => {
         edPageImgs[p] = im;
-        // pre-escalar esta hoja al tamaño actual (si ya se conoce)
-        const f = sheetFit();
-        prerenderOne(p, f.baseW, f.baseH, window.devicePixelRatio || 1);
+        prerenderOne(p);       // pre-escalar la banda de música de esta hoja
         if (p === edCurPage) { edSheetKey = ""; drawSheet(); }
       };
       im.src = `/page/${jobId}/${p}`;
@@ -1075,7 +1102,7 @@ function openEditor(jobId) {
 
 function closeEditor() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  ed.el.classList.remove("visible");
+  ed.el.classList.remove("visible", "sheet-max");
   document.body.style.overflow = "";
   edAudio.pause();
   if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
@@ -1096,70 +1123,85 @@ function fitAll() {
 function showPage(p) { edCurPage = p; edSheetKey = ""; drawSheet(); }
 
 function clampSheetPan(pw, ph, availW, availH) {
-  // no dejar huecos: si la página es mayor que el área, limitar el pan;
-  // si es menor, centrar (pan 0)
   if (pw <= availW) edSheetPanX = 0;
   else edSheetPanX = Math.max((availW - pw) / 2, Math.min((pw - availW) / 2, edSheetPanX));
   if (ph <= availH) edSheetPanY = 0;
   else edSheetPanY = Math.max((availH - ph) / 2, Math.min((ph - availH) / 2, edSheetPanY));
 }
 
-// dimensiones "contain" de la hoja en el área disponible (zoom 1)
-function sheetFit() {
+// Banda con MÚSICA de una página (fracciones verticales). Las hojas de
+// MuseScore son papel vertical casi todo en blanco: mostrar sólo la franja
+// de los pentagramas hace que la música se vea lo más grande posible (y el
+// modo pantalla completa cobre sentido). Con un pequeño margen arriba/abajo.
+function bandOf(p) {
+  if (edPageBand[p]) return edPageBand[p];
+  let lo = 1, hi = 0;
+  for (const m of edData.measures) if (m.page === p) { lo = Math.min(lo, m.y0); hi = Math.max(hi, m.y1); }
+  if (hi <= lo) { lo = 0; hi = 1; }
+  const pad = (hi - lo) * 0.05;
+  const band = [Math.max(0, lo - pad), Math.min(1, hi + pad)];
+  edPageBand[p] = band;
+  return band;
+}
+
+// dimensiones "contain" de la BANDA de música en el área disponible (zoom 1)
+function sheetFit(p) {
+  p = p || edCurPage;
   const wrap = ed.sheetWrap;
   const availW = Math.max(1, Math.floor(wrap.clientWidth));
   const availH = Math.max(1, Math.floor(wrap.clientHeight));
-  const img = edPageImgs[edCurPage];
-  const aspect = (img && img.naturalWidth) ? img.naturalWidth / img.naturalHeight
-                                           : (edData.page_aspect || 0.7071);
-  let baseW = availW, baseH = baseW / aspect;
-  if (baseH > availH) { baseH = availH; baseW = baseH * aspect; }
-  return { availW, availH, baseW, baseH };
+  const img = edPageImgs[p];
+  const pageAspect = (img && img.naturalWidth) ? img.naturalWidth / img.naturalHeight
+                                               : (edData.page_aspect || 0.7071);
+  const [b0, b1] = bandOf(p);
+  const bandAspect = pageAspect / Math.max(1e-3, b1 - b0);   // ancho/alto de la banda
+  let baseW = availW, baseH = baseW / bandAspect;
+  if (baseH > availH) { baseH = availH; baseW = baseH * bandAspect; }
+  return { availW, availH, baseW, baseH, b0, b1 };
 }
 
-// Pre-escala CADA hoja a tamaño de pantalla UNA vez (alta calidad). Reescalar
-// el PNG original (~3000×4200) es caro (~200 ms); hacerlo por adelantado hace
-// que el cambio de página en reproducción sea un blit instantáneo. Se rehace
-// sólo si cambia el tamaño del área o el dpr.
+// Pre-escala la BANDA de cada hoja a tamaño de pantalla UNA vez (alta
+// calidad). Así el cambio de página en reproducción es un blit instantáneo.
+// Se rehace sólo si cambia el tamaño del área o el dpr.
 function prerenderPages() {
   if (!edData) return;
-  const { availW, availH, baseW, baseH } = sheetFit();
+  const wrap = ed.sheetWrap;
+  const availW = Math.max(1, Math.floor(wrap.clientWidth));
+  const availH = Math.max(1, Math.floor(wrap.clientHeight));
   const dpr = window.devicePixelRatio || 1;
-  const fitKey = [Math.round(baseW), Math.round(baseH), dpr].join("x");
-  if (fitKey === edFitKey) return;
-  edFitKey = fitKey;
+  const areaKey = availW + "x" + availH + "x" + dpr;
+  if (areaKey === edFitKey) return;
+  edFitKey = areaKey;
   edPageBitmaps = {};
-  for (const p of edData.pages) {
-    const img = edPageImgs[p];
-    if (!img) continue;
-    prerenderOne(p, baseW, baseH, dpr);
-  }
-  edSheetKey = "";   // forzar recomposición del bg con los bitmaps nuevos
+  for (const p of edData.pages) if (edPageImgs[p]) prerenderOne(p);
+  edSheetKey = "";
 }
-function prerenderOne(p, baseW, baseH, dpr) {
+function prerenderOne(p) {
   const img = edPageImgs[p];
   if (!img) return;
+  const f = sheetFit(p);
+  const dpr = window.devicePixelRatio || 1;
   const bm = edPageBitmaps[p] || document.createElement("canvas");
-  bm.width = Math.round(baseW * dpr); bm.height = Math.round(baseH * dpr);
+  bm.width = Math.max(1, Math.round(f.baseW * dpr));
+  bm.height = Math.max(1, Math.round(f.baseH * dpr));
   const c = bm.getContext("2d");
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.imageSmoothingEnabled = true; c.imageSmoothingQuality = "high";
-  c.fillStyle = "#fff"; c.fillRect(0, 0, baseW, baseH);
-  c.drawImage(img, 0, 0, baseW, baseH);
+  c.fillStyle = "#fff"; c.fillRect(0, 0, f.baseW, f.baseH);
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  c.drawImage(img, 0, f.b0 * ih, iw, (f.b1 - f.b0) * ih, 0, 0, f.baseW, f.baseH);
   edPageBitmaps[p] = bm;
 }
 
-// Reconstruye el bitmap del área (hoja posicionada) SÓLO si cambió algún
-// insumo. En zoom 1 la fuente es la hoja pre-escalada (blit ~1 ms → cambio de
-// página instantáneo); con zoom se reescala desde el PNG original (nítido).
 function rebuildSheetIfNeeded() {
   prerenderPages();
-  const { availW, availH, baseW, baseH } = sheetFit();
-  const pw = baseW * edSheetZoom, ph = baseH * edSheetZoom;
+  const f = sheetFit(edCurPage);
+  const availW = f.availW, availH = f.availH;
+  const pw = f.baseW * edSheetZoom, ph = f.baseH * edSheetZoom;
   clampSheetPan(pw, ph, availW, availH);
   const ox = (availW - pw) / 2 + edSheetPanX;
   const oy = (availH - ph) / 2 + edSheetPanY;
-  edSheetLayout = { ox, oy, pw, ph, cvW: availW, cvH: availH };
+  edSheetLayout = { ox, oy, pw, ph, cvW: availW, cvH: availH, b0: f.b0, b1: f.b1 };
 
   const dpr = window.devicePixelRatio || 1;
   const zoomed = edSheetZoom > 1.001;
@@ -1182,15 +1224,18 @@ function rebuildSheetIfNeeded() {
   bg.setTransform(dpr, 0, 0, dpr, 0, 0);
   bg.clearRect(0, 0, availW, availH);
   bg.fillStyle = "#fff"; bg.fillRect(ox, oy, pw, ph);
+  bg.imageSmoothingEnabled = true; bg.imageSmoothingQuality = "high";
   const bm = edPageBitmaps[edCurPage];
   const orig = edPageImgs[edCurPage];
-  bg.imageSmoothingEnabled = true; bg.imageSmoothingQuality = "high";
   if (zoomed && orig) {
-    bg.drawImage(orig, ox, oy, pw, ph);     // nítido al ampliar (poco frecuente)
+    // nítido al ampliar: reescala la banda desde el PNG original
+    const iw = orig.naturalWidth, ih = orig.naturalHeight;
+    bg.drawImage(orig, 0, f.b0 * ih, iw, (f.b1 - f.b0) * ih, ox, oy, pw, ph);
   } else if (bm) {
-    bg.drawImage(bm, ox, oy, pw, ph);        // blit pre-escalado (instantáneo)
+    bg.drawImage(bm, ox, oy, pw, ph);          // blit pre-escalado (instantáneo)
   } else if (orig) {
-    bg.drawImage(orig, ox, oy, pw, ph);      // aún no pre-escaló: usar original
+    const iw = orig.naturalWidth, ih = orig.naturalHeight;
+    bg.drawImage(orig, 0, f.b0 * ih, iw, (f.b1 - f.b0) * ih, ox, oy, pw, ph);
   }
 }
 
@@ -1206,7 +1251,7 @@ function drawSheet() {
 
   ed.pageLbl.textContent = "Página " + edCurPage + " / " + edData.pages.length;
   const px = xf => L.ox + xf * L.pw;
-  const py = yf => L.oy + yf * L.ph;
+  const py = yf => L.oy + ((yf - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph;
 
   if (edDiag) {
     ctx.font = "11px sans-serif"; ctx.textBaseline = "top";
@@ -1327,15 +1372,34 @@ window.addEventListener("mouseup", () => {
   if (edSheetDrag) { edSheetDrag = null; ed.sheet.classList.remove("panning"); }
 });
 
-// pantalla completa
+// pantalla completa = "partitura al máximo": oculta todo el editor y escala
+// la hoja a toda la altura disponible; además pide fullscreen del navegador
+// para ganar toda la pantalla. Al recalcular, la hoja se re-escala sola.
+function setSheetMax(on) {
+  ed.el.classList.toggle("sheet-max", on);
+  ed.full.innerHTML = on ? "🗗" : "⛶";
+  ed.full.title = on ? "Salir de pantalla completa (Esc)" : "Pantalla completa";
+  // recomputar en el acto: leer clientHeight tras cambiar la clase fuerza el
+  // reflow, así la hoja se re-escala al nuevo alto disponible de inmediato
+  edSheetKey = edTracksKey = "";
+  if (edData) { resizeTracks(); drawTracks(); drawSheet(); }
+}
 ed.full.addEventListener("click", () => {
-  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  else ed.el.requestFullscreen().catch(() => {});
+  const willMax = !ed.el.classList.contains("sheet-max");
+  setSheetMax(willMax);
+  if (willMax && !document.fullscreenElement)
+    ed.el.requestFullscreen().catch(() => {});
+  else if (!willMax && document.fullscreenElement)
+    document.exitFullscreen().catch(() => {});
 });
 document.addEventListener("fullscreenchange", () => {
-  // recomputar tamaños tras el cambio (el área de la hoja cambia)
-  edSheetKey = edTracksKey = "";
-  if (edData) { resizeTracks(); fitAll(); updateAll(); }
+  // salir de fullscreen (p.ej. con Esc) también sale del modo maximizado
+  if (!document.fullscreenElement && ed.el.classList.contains("sheet-max")) {
+    setSheetMax(false);
+  } else {
+    edSheetKey = edTracksKey = "";
+    if (edData) { resizeTracks(); drawTracks(); drawSheet(); }
+  }
 });
 
 // ── tiras de tiempo ──────────────────────────────────────────────────────────
@@ -1430,6 +1494,9 @@ function rebuildTracksIfNeeded() {
 
 function drawTracks() {
   if (!edData) return;
+  // en modo "partitura al máximo" las tiras están ocultas (tamaño 0): no hay
+  // nada que dibujar y drawImage de un canvas 0×0 lanzaría excepción
+  if (ed.tracks.clientWidth === 0 || ed.tracks.clientHeight === 0) return;
   rebuildTracksIfNeeded();
   const dpr = window.devicePixelRatio || 1;
   const W = ed.tracks.clientWidth, H = ed.tracks.clientHeight;
@@ -1587,6 +1654,10 @@ document.addEventListener("keydown", e => {
   }
   else if (e.key === "d" || e.key === "D") { edDiag = !edDiag; edSheetKey = ""; drawSheet(); }
   else if (e.key === "f" || e.key === "F") { ed.full.click(); }
+  else if (e.key === "Escape" && ed.el.classList.contains("sheet-max")) {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    setSheetMax(false);   // salir del modo maximizado
+  }
 });
 
 // ── finalizar ────────────────────────────────────────────────────────────────
