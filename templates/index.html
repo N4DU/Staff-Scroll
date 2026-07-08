@@ -403,11 +403,22 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 #edSheet {
-  max-height: 100%; max-width: 100%;
   border-radius: 6px; border: 1px solid var(--border);
   background: #fff; display: block;
-  cursor: pointer;
 }
+#edSheet.zoomed { cursor: grab; }
+#edSheet.panning { cursor: grabbing; }
+.ed-sheet-tools {
+  position: absolute; top: 8px; left: 8px;
+  display: flex; gap: 5px;
+}
+.ed-sheet-btn {
+  width: 30px; height: 30px; border-radius: 6px;
+  background: rgba(0,0,0,0.6); border: 1px solid var(--border);
+  color: var(--text); font-size: 1rem; cursor: pointer; line-height: 1;
+}
+.ed-sheet-btn:hover { border-color: var(--orange); color: var(--orange); }
+.sync-editor:fullscreen { padding: 12px 18px 14px; }
 .ed-page-nav {
   background: var(--surface); border: 1px solid var(--border);
   color: var(--text); border-radius: 8px; font-size: 1.4rem;
@@ -586,6 +597,12 @@ body {
     <div class="ed-sheet-wrap">
       <canvas id="edSheet"></canvas>
       <div class="ed-page-label" id="edPageLabel"></div>
+      <div class="ed-sheet-tools">
+        <button class="ed-sheet-btn" id="edZoomScoreOut" title="Alejar la partitura">&minus;</button>
+        <button class="ed-sheet-btn" id="edZoomScoreIn" title="Acercar la partitura">+</button>
+        <button class="ed-sheet-btn" id="edZoomScoreReset" title="Ajustar a la pantalla">⤢</button>
+        <button class="ed-sheet-btn" id="edFull" title="Pantalla completa">⛶</button>
+      </div>
     </div>
     <button class="ed-page-nav" id="edNextPage" type="button">&#8250;</button>
   </div>
@@ -961,6 +978,10 @@ const ed = {
   zoomIn:   document.getElementById("edZoomIn"),
   zoomOut:  document.getElementById("edZoomOut"),
   zoomAll:  document.getElementById("edZoomAll"),
+  zScoreIn: document.getElementById("edZoomScoreIn"),
+  zScoreOut:document.getElementById("edZoomScoreOut"),
+  zScoreRst:document.getElementById("edZoomScoreReset"),
+  full:     document.getElementById("edFull"),
   song:     document.getElementById("edSongName"),
   finalize: document.getElementById("edFinalize"),
   skip:     document.getElementById("edSkip"),
@@ -969,25 +990,37 @@ const edAudio = new Audio();
 edAudio.preload = "auto";
 
 let edData = null;
-let edPageImgs = {};             // Image decodificada por página (dibujo síncrono)
-let edBeats = [];                // grilla de tiempos de pulso (música, s desde compás 1)
+let edPageImgs = {};             // Image decodificada por página
+let edBeats = [];                // grilla de tiempos de pulso (música, s)
 let edS = 0, edA = 0;            // posiciones en pantalla (s): compás 1 y audio 0
-let edZoom = 10, edView = 0;     // px por segundo, inicio visible (s)
-let edDrag = null;               // arrastre activo (cursor | score | song)
+let edZoom = 10, edView = 0;     // tiras: px por segundo, inicio visible (s)
+let edDrag = null;
 let edRAF = null;
-let edCurPage = 1;               // página mostrada en grande
-let edFollow = true;             // la página sigue la reproducción
-let edDiag = false;              // tecla D: superponer lo que el motor detectó
+let edCurPage = 1;
+let edFollow = true;
+let edDiag = false;
 
-const offset  = () => edS - edA;                    // para /finalize
+// zoom/pan de la HOJA (independiente del zoom de las tiras)
+let edSheetZoom = 1, edSheetPanX = 0, edSheetPanY = 0;
+let edSheetDrag = null;
+
+// bitmaps cacheados (se reconstruyen sólo cuando cambian sus insumos, no por
+// frame → la reproducción queda fluida y el cambio de hoja es inmediato)
+let edSheetBg = document.createElement("canvas");
+let edSheetKey = "";
+let edSheetLayout = null;         // {ox, oy, pw, ph, cvW, cvH}
+let edPageBitmaps = {};           // hoja pre-escalada a tamaño de pantalla (por página)
+let edFitKey = "";                // tamaño/dpr con que se pre-escalaron las hojas
+let edTracksBg = document.createElement("canvas");
+let edTracksKey = "";
+
+const offset  = () => edS - edA;
 const beatDur = () => 60 / (edData ? edData.score_bpm : 120);
 const xOfSig  = s => (s - edView) * edZoom;
 const sigOfX  = x => edView + x / edZoom;
-const curSig  = () => edAudio.currentTime + edA;    // cursor en pantalla (s)
-const curMusic = () => curSig() - edS;              // tiempo musical actual (s)
+const curSig  = () => edAudio.currentTime + edA;
+const curMusic = () => curSig() - edS;
 
-// grilla de pulsos en tiempo musical (tempo-aware: usa la duración real de
-// cada compás, así los cambios de tempo no desalinean el imán)
 function buildBeatGrid() {
   edBeats = [];
   for (const m of edData.measures) {
@@ -997,7 +1030,6 @@ function buildBeatGrid() {
   const last = edData.measures[edData.measures.length - 1];
   if (last) edBeats.push(last.t + last.dur);
 }
-// pulso (tiempo musical) más cercano a tau — búsqueda binaria
 function nearestBeat(tau) {
   if (!edBeats.length) return tau;
   let lo = 0, hi = edBeats.length - 1;
@@ -1014,14 +1046,19 @@ function openEditor(jobId) {
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
     edS = 0; edA = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
+    edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     buildBeatGrid();
-    // precargar las hojas ya DECODIFICADAS → dibujarlas es síncrono y el
-    // cambio de página no parpadea ni se desincroniza
-    edPageImgs = {};
+    edPageImgs = {}; edPageBitmaps = {}; edFitKey = "";
     d.pages.forEach(p => {
       const im = new Image();
-      im.onload = () => { edPageImgs[p] = im; if (p === edCurPage) drawSheet(); };
+      im.onload = () => {
+        edPageImgs[p] = im;
+        // pre-escalar esta hoja al tamaño actual (si ya se conoce)
+        const f = sheetFit();
+        prerenderOne(p, f.baseW, f.baseH, window.devicePixelRatio || 1);
+        if (p === edCurPage) { edSheetKey = ""; drawSheet(); }
+      };
       im.src = `/page/${jobId}/${p}`;
     });
     ed.song.textContent = d.song_name + " · " + d.measures.length +
@@ -1030,12 +1067,14 @@ function openEditor(jobId) {
     document.body.style.overflow = "hidden";
     ed.finalize.disabled = false;
     ed.skip.disabled = false;
+    edSheetKey = edTracksKey = "";
     fitAll();
     updateAll();
   }).catch(() => showError("No se pudieron cargar los datos del editor."));
 }
 
 function closeEditor() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   ed.el.classList.remove("visible");
   document.body.style.overflow = "";
   edAudio.pause();
@@ -1049,65 +1088,146 @@ function fitAll() {
   resizeTracks();
   edZoom = Math.max(1, (ed.tracks.clientWidth - 30) / Math.max(1, hi - lo));
   edView = lo - 10 / edZoom;
+  edTracksKey = "";
   drawTracks();
 }
 
-// ── hoja de partitura (canvas único: hoja + cursor por tiempos) ──────────────
-function showPage(p) {
-  edCurPage = p;
-  drawSheet();
+// ── hoja de partitura ────────────────────────────────────────────────────────
+function showPage(p) { edCurPage = p; edSheetKey = ""; drawSheet(); }
+
+function clampSheetPan(pw, ph, availW, availH) {
+  // no dejar huecos: si la página es mayor que el área, limitar el pan;
+  // si es menor, centrar (pan 0)
+  if (pw <= availW) edSheetPanX = 0;
+  else edSheetPanX = Math.max((availW - pw) / 2, Math.min((pw - availW) / 2, edSheetPanX));
+  if (ph <= availH) edSheetPanY = 0;
+  else edSheetPanY = Math.max((availH - ph) / 2, Math.min((ph - availH) / 2, edSheetPanY));
+}
+
+// dimensiones "contain" de la hoja en el área disponible (zoom 1)
+function sheetFit() {
+  const wrap = ed.sheetWrap;
+  const availW = Math.max(1, Math.floor(wrap.clientWidth));
+  const availH = Math.max(1, Math.floor(wrap.clientHeight));
+  const img = edPageImgs[edCurPage];
+  const aspect = (img && img.naturalWidth) ? img.naturalWidth / img.naturalHeight
+                                           : (edData.page_aspect || 0.7071);
+  let baseW = availW, baseH = baseW / aspect;
+  if (baseH > availH) { baseH = availH; baseW = baseH * aspect; }
+  return { availW, availH, baseW, baseH };
+}
+
+// Pre-escala CADA hoja a tamaño de pantalla UNA vez (alta calidad). Reescalar
+// el PNG original (~3000×4200) es caro (~200 ms); hacerlo por adelantado hace
+// que el cambio de página en reproducción sea un blit instantáneo. Se rehace
+// sólo si cambia el tamaño del área o el dpr.
+function prerenderPages() {
+  if (!edData) return;
+  const { availW, availH, baseW, baseH } = sheetFit();
+  const dpr = window.devicePixelRatio || 1;
+  const fitKey = [Math.round(baseW), Math.round(baseH), dpr].join("x");
+  if (fitKey === edFitKey) return;
+  edFitKey = fitKey;
+  edPageBitmaps = {};
+  for (const p of edData.pages) {
+    const img = edPageImgs[p];
+    if (!img) continue;
+    prerenderOne(p, baseW, baseH, dpr);
+  }
+  edSheetKey = "";   // forzar recomposición del bg con los bitmaps nuevos
+}
+function prerenderOne(p, baseW, baseH, dpr) {
+  const img = edPageImgs[p];
+  if (!img) return;
+  const bm = edPageBitmaps[p] || document.createElement("canvas");
+  bm.width = Math.round(baseW * dpr); bm.height = Math.round(baseH * dpr);
+  const c = bm.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = "high";
+  c.fillStyle = "#fff"; c.fillRect(0, 0, baseW, baseH);
+  c.drawImage(img, 0, 0, baseW, baseH);
+  edPageBitmaps[p] = bm;
+}
+
+// Reconstruye el bitmap del área (hoja posicionada) SÓLO si cambió algún
+// insumo. En zoom 1 la fuente es la hoja pre-escalada (blit ~1 ms → cambio de
+// página instantáneo); con zoom se reescala desde el PNG original (nítido).
+function rebuildSheetIfNeeded() {
+  prerenderPages();
+  const { availW, availH, baseW, baseH } = sheetFit();
+  const pw = baseW * edSheetZoom, ph = baseH * edSheetZoom;
+  clampSheetPan(pw, ph, availW, availH);
+  const ox = (availW - pw) / 2 + edSheetPanX;
+  const oy = (availH - ph) / 2 + edSheetPanY;
+  edSheetLayout = { ox, oy, pw, ph, cvW: availW, cvH: availH };
+
+  const dpr = window.devicePixelRatio || 1;
+  const zoomed = edSheetZoom > 1.001;
+  const bmReady = !!edPageBitmaps[edCurPage];
+  const key = [edCurPage, availW, availH, edSheetZoom.toFixed(3),
+               Math.round(edSheetPanX), Math.round(edSheetPanY),
+               bmReady ? 1 : 0, zoomed ? 1 : 0, dpr].join("|");
+  const bw = Math.round(availW * dpr), bh = Math.round(availH * dpr);
+  if (ed.sheet.width !== bw || ed.sheet.height !== bh) {
+    ed.sheet.width = bw; ed.sheet.height = bh;
+    ed.sheet.style.width = availW + "px"; ed.sheet.style.height = availH + "px";
+  }
+  if (key === edSheetKey) return;
+  edSheetKey = key;
+
+  if (edSheetBg.width !== bw || edSheetBg.height !== bh) {
+    edSheetBg.width = bw; edSheetBg.height = bh;
+  }
+  const bg = edSheetBg.getContext("2d");
+  bg.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bg.clearRect(0, 0, availW, availH);
+  bg.fillStyle = "#fff"; bg.fillRect(ox, oy, pw, ph);
+  const bm = edPageBitmaps[edCurPage];
+  const orig = edPageImgs[edCurPage];
+  bg.imageSmoothingEnabled = true; bg.imageSmoothingQuality = "high";
+  if (zoomed && orig) {
+    bg.drawImage(orig, ox, oy, pw, ph);     // nítido al ampliar (poco frecuente)
+  } else if (bm) {
+    bg.drawImage(bm, ox, oy, pw, ph);        // blit pre-escalado (instantáneo)
+  } else if (orig) {
+    bg.drawImage(orig, ox, oy, pw, ph);      // aún no pre-escaló: usar original
+  }
 }
 
 function drawSheet() {
   if (!edData) return;
-  const cv = ed.sheet, wrap = ed.sheetWrap;
-  const img = edPageImgs[edCurPage];
-  const aspect = (img && img.naturalWidth)
-    ? img.naturalWidth / img.naturalHeight
-    : (edData.page_aspect || 0.7071);
-  // tamaño que entra en el área disponible conservando la proporción
-  const availW = Math.max(1, wrap.clientWidth);
-  const availH = Math.max(1, wrap.clientHeight);
-  let dw = availW, dh = dw / aspect;
-  if (dh > availH) { dh = availH; dw = dh * aspect; }
+  rebuildSheetIfNeeded();
   const dpr = window.devicePixelRatio || 1;
-  cv.style.width = dw + "px"; cv.style.height = dh + "px";
-  const bw = Math.round(dw * dpr), bh = Math.round(dh * dpr);
-  if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
-  const ctx = cv.getContext("2d");
+  const L = edSheetLayout;
+  const ctx = ed.sheet.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, dw, dh);
-  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dw, dh);
-  if (img) ctx.drawImage(img, 0, 0, dw, dh);
+  ctx.clearRect(0, 0, L.cvW, L.cvH);
+  ctx.drawImage(edSheetBg, 0, 0, L.cvW, L.cvH);   // bitmap cacheado (barato)
 
   ed.pageLbl.textContent = "Página " + edCurPage + " / " + edData.pages.length;
+  const px = xf => L.ox + xf * L.pw;
+  const py = yf => L.oy + yf * L.ph;
 
-  // Modo diagnóstico (tecla D): límites de compás (azul), golpes mapeados
-  // (verde), compás sin mapa (rojo).
   if (edDiag) {
     ctx.font = "11px sans-serif"; ctx.textBaseline = "top";
     edData.measures.forEach((mm, i) => {
       if (mm.page !== edCurPage) return;
-      const y0 = mm.y0 * dh, y1 = mm.y1 * dh;
       ctx.strokeStyle = "rgba(60,120,255,0.7)"; ctx.lineWidth = 1.5;
       for (const xf of [mm.x0, mm.x1]) {
-        ctx.beginPath(); ctx.moveTo(xf * dw, y0); ctx.lineTo(xf * dw, y1); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(px(xf), py(mm.y0)); ctx.lineTo(px(xf), py(mm.y1)); ctx.stroke();
       }
       ctx.fillStyle = "rgba(60,120,255,0.9)";
-      ctx.fillText(String(i + 1), mm.x0 * dw + 2, y0);
+      ctx.fillText(String(i + 1), px(mm.x0) + 2, py(mm.y0));
       if (mm.hx) {
         ctx.fillStyle = "rgba(0,170,60,0.85)";
-        for (const [b, xf] of mm.hx) {
-          ctx.beginPath(); ctx.arc(xf * dw, (y0 + y1) / 2, 4, 0, 7); ctx.fill();
-        }
+        for (const [b, xf] of mm.hx) { ctx.beginPath(); ctx.arc(px(xf), py((mm.y0 + mm.y1) / 2), 4, 0, 7); ctx.fill(); }
       } else {
         ctx.strokeStyle = "rgba(230,40,40,0.8)";
-        ctx.strokeRect(mm.x0 * dw, y0, (mm.x1 - mm.x0) * dw, y1 - y0);
+        ctx.strokeRect(px(mm.x0), py(mm.y0), px(mm.x1) - px(mm.x0), py(mm.y1) - py(mm.y0));
       }
     });
   }
 
-  // cursor amarillo: salta de a tiempos, sobre la posición GRABADA del golpe
   const tau = curMusic();
   const m = measureAt(tau);
   if (!m || m.page !== edCurPage) return;
@@ -1129,13 +1249,9 @@ function drawSheet() {
   } else {
     xf = m.x0 + (m.x1 - m.x0) * (bi / nb);
   }
-  const x = xf * dw;
   ctx.strokeStyle = "rgba(255,165,0,0.95)";
   ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(x, m.y0 * dh);
-  ctx.lineTo(x, m.y1 * dh);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px(xf), py(m.y0)); ctx.lineTo(px(xf), py(m.y1)); ctx.stroke();
 }
 
 function measureAt(tau) {
@@ -1145,8 +1261,6 @@ function measureAt(tau) {
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].t <= tau) lo = mid; else hi = mid - 1; }
   return ms[lo];
 }
-
-// página del compás activo (para navegación manual y auto-follow)
 function activePage() {
   const m = measureAt(curMusic());
   return m ? m.page : edCurPage;
@@ -1163,32 +1277,96 @@ ed.nextPage.addEventListener("click", () => {
   if (i < edData.pages.length - 1) showPage(edData.pages[i + 1]);
 });
 
+// ── zoom / pan de la hoja ────────────────────────────────────────────────────
+// Zoom centrado en el puntero (rueda) o en el centro (botones); el pan fino
+// se hace arrastrando la hoja cuando hay zoom.
+function zoomSheet(factor, pivotX, pivotY) {
+  const L = edSheetLayout;
+  const nz = Math.min(6, Math.max(1, edSheetZoom * factor));
+  if (Math.abs(nz - edSheetZoom) < 1e-3) return;
+  if (L && pivotX != null) {
+    // punto de la hoja bajo el cursor antes del zoom
+    const fx = (pivotX - L.ox) / L.pw, fy = (pivotY - L.oy) / L.ph;
+    const baseW = L.pw / edSheetZoom, baseH = L.ph / edSheetZoom;
+    const npw = baseW * nz, nph = baseH * nz;
+    // queremos que fx caiga de nuevo bajo pivotX: ox' = pivotX - fx*npw
+    const ox2 = pivotX - fx * npw, oy2 = pivotY - fy * nph;
+    edSheetPanX = ox2 - (L.cvW - npw) / 2;
+    edSheetPanY = oy2 - (L.cvH - nph) / 2;
+  }
+  edSheetZoom = nz;
+  ed.sheet.classList.toggle("zoomed", edSheetZoom > 1.001);
+  if (edSheetZoom <= 1.001) { edSheetPanX = edSheetPanY = 0; }
+  edSheetKey = "";
+  drawSheet();
+}
+ed.sheet.addEventListener("wheel", e => {
+  e.preventDefault();
+  const rect = ed.sheet.getBoundingClientRect();
+  zoomSheet(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - rect.left, e.clientY - rect.top);
+}, { passive: false });
+ed.zScoreIn.addEventListener("click", () => { const L = edSheetLayout; zoomSheet(1.3, L ? L.cvW / 2 : null, L ? L.cvH / 2 : null); });
+ed.zScoreOut.addEventListener("click", () => { const L = edSheetLayout; zoomSheet(1 / 1.3, L ? L.cvW / 2 : null, L ? L.cvH / 2 : null); });
+ed.zScoreRst.addEventListener("click", () => { edSheetZoom = 1; edSheetPanX = edSheetPanY = 0; ed.sheet.classList.remove("zoomed"); edSheetKey = ""; drawSheet(); });
+
+// pan de la hoja arrastrando (sólo cuando hay zoom)
+ed.sheet.addEventListener("mousedown", e => {
+  if (edSheetZoom <= 1.001) return;
+  edSheetDrag = { x: e.clientX, y: e.clientY, px: edSheetPanX, py: edSheetPanY };
+  ed.sheet.classList.add("panning");
+  e.preventDefault();
+});
+window.addEventListener("mousemove", e => {
+  if (!edSheetDrag) return;
+  edSheetPanX = edSheetDrag.px + (e.clientX - edSheetDrag.x);
+  edSheetPanY = edSheetDrag.py + (e.clientY - edSheetDrag.y);
+  edSheetKey = "";
+  drawSheet();
+});
+window.addEventListener("mouseup", () => {
+  if (edSheetDrag) { edSheetDrag = null; ed.sheet.classList.remove("panning"); }
+});
+
+// pantalla completa
+ed.full.addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else ed.el.requestFullscreen().catch(() => {});
+});
+document.addEventListener("fullscreenchange", () => {
+  // recomputar tamaños tras el cambio (el área de la hoja cambia)
+  edSheetKey = edTracksKey = "";
+  if (edData) { resizeTracks(); fitAll(); updateAll(); }
+});
+
 // ── tiras de tiempo ──────────────────────────────────────────────────────────
 const TRK = { scoreY: 6, scoreH: 54, songY: 68, songH: 84 };
 
 function resizeTracks() {
   const dpr = window.devicePixelRatio || 1;
   const w = ed.tracks.clientWidth, h = ed.tracks.clientHeight;
-  if (ed.tracks.width !== Math.round(w * dpr)) {
-    ed.tracks.width = Math.round(w * dpr); ed.tracks.height = Math.round(h * dpr);
-  }
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (ed.tracks.width !== bw) { ed.tracks.width = bw; ed.tracks.height = bh; edTracksKey = ""; }
 }
 
-function drawTracks() {
-  if (!edData) return;
+// bitmap estático de las tiras (onda + grilla), sólo se rehace al cambiar
+// vista/zoom/alineación/tamaño — no en cada frame
+function rebuildTracksIfNeeded() {
   resizeTracks();
   const dpr = window.devicePixelRatio || 1;
-  const ctx = ed.tracks.getContext("2d");
   const W = ed.tracks.clientWidth, H = ed.tracks.clientHeight;
+  const key = [W, H, edZoom.toFixed(4), edView.toFixed(4), edS.toFixed(4), edA.toFixed(4)].join("|");
+  if (key === edTracksKey) return;
+  edTracksKey = key;
+  if (edTracksBg.width !== ed.tracks.width) { edTracksBg.width = ed.tracks.width; edTracksBg.height = ed.tracks.height; }
+  const ctx = edTracksBg.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.font = "10px sans-serif"; ctx.textBaseline = "top";
 
-  // ── tira PARTITURA ──
   const sy = TRK.scoreY, sh = TRK.scoreH;
   ctx.fillStyle = "rgba(255,165,0,0.09)";
   ctx.fillRect(xOfSig(edS), sy, edData.music_duration * edZoom, sh);
-  if (edData.lead_in > 0) {   // zona del conteo previo
+  if (edData.lead_in > 0) {
     ctx.fillStyle = "rgba(150,150,150,0.12)";
     ctx.fillRect(xOfSig(edS - edData.lead_in), sy, edData.lead_in * edZoom, sh);
   }
@@ -1217,7 +1395,6 @@ function drawTracks() {
   ctx.fillText("PARTITURA", 6, sy + sh - 12);
   ctx.font = "10px sans-serif";
 
-  // ── tira CANCIÓN ──
   const ay = TRK.songY, ah = TRK.songH;
   ctx.fillStyle = "rgba(90,200,255,0.05)";
   ctx.fillRect(xOfSig(edA), ay, edData.audio.duration * edZoom, ah);
@@ -1228,16 +1405,16 @@ function drawTracks() {
     const midY = ay + ah * 0.55, amp = ah * 0.42;
     ctx.strokeStyle = "#a8a8a8"; ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let px = 0; px < W; px++) {
-      const u0 = sigOfX(px) - edA, u1 = sigOfX(px + 1) - edA;
+    for (let px2 = 0; px2 < W; px2++) {
+      const u0 = sigOfX(px2) - edA, u1 = sigOfX(px2 + 1) - edA;
       if (u1 < 0 || u0 > dur) continue;
       const b0 = Math.max(0, Math.floor(u0 / bucketDur));
       const b1 = Math.min(mins.length - 1, Math.floor(u1 / bucketDur));
       let lo = 1, hi = -1;
       for (let b = b0; b <= b1; b++) { if (mins[b] < lo) lo = mins[b]; if (maxs[b] > hi) hi = maxs[b]; }
       if (hi < lo) continue;
-      ctx.moveTo(px + 0.5, midY - hi * amp);
-      ctx.lineTo(px + 0.5, midY - lo * amp + 1);
+      ctx.moveTo(px2 + 0.5, midY - hi * amp);
+      ctx.lineTo(px2 + 0.5, midY - lo * amp + 1);
     }
     ctx.stroke();
   }
@@ -1249,17 +1426,23 @@ function drawTracks() {
   }
   ctx.fillStyle = "rgba(90,200,255,0.8)"; ctx.font = "bold 9px sans-serif";
   ctx.fillText("CANCIÓN", 6, ay + ah - 12);
-  ctx.font = "10px sans-serif";
+}
 
-  // ── cursor de reproducción (cruza ambas tiras) ──
+function drawTracks() {
+  if (!edData) return;
+  rebuildTracksIfNeeded();
+  const dpr = window.devicePixelRatio || 1;
+  const W = ed.tracks.clientWidth, H = ed.tracks.clientHeight;
+  const ctx = ed.tracks.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(edTracksBg, 0, 0, W, H);   // bitmap cacheado (barato)
   const cx = xOfSig(curSig());
   if (cx >= -1 && cx <= W + 1) {
     ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
-    // tirador (para indicar que se puede arrastrar)
     ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.moveTo(cx - 5, 0); ctx.lineTo(cx + 5, 0); ctx.lineTo(cx, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(cx - 5, 0); ctx.lineTo(cx + 5, 0); ctx.lineTo(cx, 7); ctx.fill();
   }
 }
 
@@ -1269,7 +1452,6 @@ function fmtTime(s) {
   const m = Math.floor(s / 60), sec = (s - m * 60).toFixed(3).padStart(6, "0");
   return (neg ? "-" : "") + m + ":" + sec;
 }
-
 function updateReadouts() {
   ed.time.textContent = fmtTime(edAudio.currentTime || 0);
   const m = measureAt(curMusic());
@@ -1282,22 +1464,19 @@ function updateReadouts() {
 }
 
 function updateAll() {
-  // fijar la página activa ANTES de dibujar → el cambio de hoja y el cursor
-  // quedan siempre consistentes (nunca un frame con la página vieja)
   if (edFollow) {
     const ap = activePage();
-    if (ap !== edCurPage) edCurPage = ap;
+    if (ap !== edCurPage) { edCurPage = ap; edSheetKey = ""; }
   }
   drawTracks(); updateReadouts(); drawSheet();
 }
 
-// ── reproducción (sin <video>: pausa y cursor instantáneos) ──────────────────
+// ── reproducción ─────────────────────────────────────────────────────────────
 function tick() {
   if (edAudio.paused) { edRAF = null; return; }
   updateAll();
   edRAF = requestAnimationFrame(tick);
 }
-
 function playFromSig(sig) {
   edFollow = true;
   edAudio.currentTime = Math.min(Math.max(sig - edA, 0), edData.audio.duration - 0.1);
@@ -1306,14 +1485,12 @@ function playFromSig(sig) {
     if (!edRAF) edRAF = requestAnimationFrame(tick);
   }).catch(() => {});
 }
-
 function pauseAll() {
   edAudio.pause();
   ed.play.innerHTML = "&#9654; Probar desde el comp&aacute;s 1";
   updateAll();
 }
 edAudio.addEventListener("ended", pauseAll);
-
 ed.play.addEventListener("click", () => {
   if (edAudio.paused) playFromSig(Math.max(edS - 1.5, edA));
   else pauseAll();
@@ -1322,22 +1499,19 @@ ed.testEnd.addEventListener("click", () => {
   playFromSig(Math.max(edS + edData.music_duration - 8, edA));
 });
 
-// ── colocar el cursor en un tiempo (s en pantalla), con imán a los pulsos ─────
 function seekToSig(sig, magnet) {
   if (magnet && ed.snap.checked) sig = edS + nearestBeat(sig - edS);
   edAudio.currentTime = Math.min(Math.max(sig - edA, 0), edData.audio.duration - 0.1);
 }
 
 // ── interacción con las tiras ────────────────────────────────────────────────
-// Tres cosas arrastrables: el CURSOR blanco (si agarrás cerca de él), la tira
-// de PARTITURA (arriba) o la de CANCIÓN (abajo).
 ed.tracks.addEventListener("mousedown", e => {
   if (!edData) return;
   const rect = ed.tracks.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
   const cx = xOfSig(curSig());
   let kind;
-  if (Math.abs(x - cx) <= 7) kind = "cursor";                 // agarrar la línea blanca
+  if (Math.abs(x - cx) <= 7) kind = "cursor";
   else kind = y < (TRK.scoreY + TRK.scoreH + TRK.songY) / 2 ? "score" : "song";
   edDrag = { kind, x0: x, S0: edS, A0: edA, sig0: curSig(), moved: false };
   ed.tracks.classList.add("dragging");
@@ -1351,41 +1525,33 @@ window.addEventListener("mousemove", e => {
   if (Math.abs(dx) > 2) edDrag.moved = true;
   if (!edDrag.moved) return;
   const dSec = dx / edZoom;
-
   if (edDrag.kind === "cursor") {
-    // deslizar la línea blanca; con imán se pega al pulso más cercano
     seekToSig(sigOfX(x), true);
   } else if (edDrag.kind === "score") {
-    // mover la partitura; con imán, un pulso de la partitura cae EXACTO sobre
-    // el cursor (así la línea blanca queda encima de una línea de tiempo)
     const cand = edDrag.S0 + dSec;
     if (ed.snap.checked && edBeats.length) {
-      const cs = edDrag.sig0;             // el cursor no se mueve al arrastrar la partitura
+      const cs = edDrag.sig0;
       let best = cand, bestD = Infinity;
       for (const bt of edBeats) {
-        const s = cs - bt;                // edS que pone ese pulso bajo el cursor
-        const d = Math.abs(s - cand);
+        const s = cs - bt, d = Math.abs(s - cand);
         if (d < bestD) { bestD = d; best = s; }
       }
       edS = best;
-    } else {
-      edS = cand;
-    }
+    } else { edS = cand; }
+    edTracksKey = "";
   } else {
-    // la canción se desliza libre; el cursor queda anclado a la PARTITURA
     edA = edDrag.A0 + dSec;
-    edAudio.currentTime = Math.min(Math.max(edDrag.sig0 - edA, 0),
-                                   edData.audio.duration - 0.1);
+    edAudio.currentTime = Math.min(Math.max(edDrag.sig0 - edA, 0), edData.audio.duration - 0.1);
+    edTracksKey = "";
   }
   updateAll();
 });
 window.addEventListener("mouseup", e => {
   if (!edDrag) return;
   ed.tracks.classList.remove("dragging");
-  const wasClick = !edDrag.moved, kind = edDrag.kind;
+  const wasClick = !edDrag.moved;
   edDrag = null;
   if (wasClick && edData) {
-    // click simple: mover el cursor ahí (con imán a los pulsos)
     const rect = ed.tracks.getBoundingClientRect();
     edFollow = true;
     seekToSig(sigOfX(e.clientX - rect.left), true);
@@ -1397,6 +1563,7 @@ function zoomAt(factor, xPivot) {
   const sAt = sigOfX(xPivot);
   edZoom = Math.min(2000, Math.max(0.5, edZoom * factor));
   edView = sAt - xPivot / edZoom;
+  edTracksKey = "";
   drawTracks();
 }
 ed.tracks.addEventListener("wheel", e => {
@@ -1414,13 +1581,12 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     const step = (e.shiftKey ? 1 : 10) / 1000;
-    edA += (e.key === "ArrowRight" ? step : -step);   // afina la canción
+    edA += (e.key === "ArrowRight" ? step : -step);
+    edTracksKey = "";
     updateAll();
   }
-  else if (e.key === "d" || e.key === "D") {
-    edDiag = !edDiag;
-    drawSheet();
-  }
+  else if (e.key === "d" || e.key === "D") { edDiag = !edDiag; edSheetKey = ""; drawSheet(); }
+  else if (e.key === "f" || e.key === "F") { ed.full.click(); }
 });
 
 // ── finalizar ────────────────────────────────────────────────────────────────
@@ -1429,8 +1595,7 @@ async function submitFinalize(body) {
   ed.finalize.disabled = ed.skip.disabled = true;
   try {
     const r = await fetch(`/finalize/${currentJobId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     const res = await r.json();
@@ -1447,7 +1612,9 @@ async function submitFinalize(body) {
 ed.finalize.addEventListener("click", () => submitFinalize({ offset: offset(), stretch: 1.0 }));
 ed.skip.addEventListener("click",     () => submitFinalize({ skip: true }));
 
-window.addEventListener("resize", () => { if (edData) { drawTracks(); drawSheet(); } });
+window.addEventListener("resize", () => {
+  if (edData) { edSheetKey = edTracksKey = ""; resizeTracks(); drawTracks(); drawSheet(); }
+});
 </script>
 </body>
 </html>
