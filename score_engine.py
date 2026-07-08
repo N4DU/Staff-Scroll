@@ -613,7 +613,9 @@ class ScoreEngine:
             else:
                 top_svg = top_edge * (1.0 - gap)
             if idx == n_pages - 1:
-                bot_svg = min(lay["h"], bot_edge + _PAD_SVG)
+                # Última página: conservar TODO lo que hay debajo del último
+                # sistema (dibujos, símbolos, colas) — nunca recortar al ras.
+                bot_svg = lay["h"]
             else:
                 bot_svg = bot_edge + (lay["h"] - bot_edge) * gap
 
@@ -664,7 +666,11 @@ class ScoreEngine:
         self.lead_in = 0.0
         if self.count_beats > 0:
             qps0 = self.score_data[fn0]["measures"][0]["qps"]
-            lead = self.count_beats / qps0
+            # Un pulso extra de anticipación ANTES de la cuenta: el video no
+            # arranca contando de golpe, da un instante para reaccionar →
+            #   (prep)··4··3··2··1··arranca   en vez de   4·3·2·1·arranca
+            self.count_slots = self.count_beats + 1
+            lead = self.count_slots / qps0
             self.lead_in = lead
             self.keyframes = ([(0.0, self.keyframes[0][1])] +
                               [(t + lead, y) for t, y in self.keyframes])
@@ -759,7 +765,11 @@ class ScoreEngine:
                          else count_before / total)
                 y0 = self._sys_top(fn, fidx, sys_i)
                 gi = sys_gidx[key]
-                y1 = all_sys[gi + 1] if gi + 1 < len(all_sys) else y0 + self.sys_spacing_px
+                # El ÚLTIMO sistema global no tiene "sistema siguiente" al que
+                # avanzar: se fija en la línea lectora (y1 = y0) para que el
+                # scroll se detenga ahí, con la última línea centrada y el resto
+                # de la hoja debajo, en vez de seguir bajando al vacío.
+                y1 = all_sys[gi + 1] if gi + 1 < len(all_sys) else y0
                 base_kf.append((t, y0 + (y1 - y0) * frac))
                 timeline.append((t, dur, fn, m_idx, info["beats"], round(info["qps"] * 60)))
                 sys_play_count[key] = count_before + 1
@@ -896,26 +906,32 @@ class ScoreEngine:
     # ── frame renderer ────────────────────────────────────────────────────────
     def render_frame(self, time_s):
         cfg = self.cfg
-        scroll_y = self._scroll_y_at(time_s)
-        fs = max(0, min(int(scroll_y) - self.playhead_y, self.canvas_h - self.video_h))
 
-        # Recorte del lienzo
-        frame = np.empty((self.video_h, self.video_w, 3), dtype=np.uint8)
-        frame[:] = [cfg["bg"][2], cfg["bg"][1], cfg["bg"][0]]
-        y1 = max(0, fs)
-        y2 = min(self.canvas_h, fs + self.video_h)
-        if y1 < y2:
-            crop = self.canvas_np[y1:y2]
-            dst  = y1 - fs
-            frame[dst:dst + crop.shape[0]] = crop
+        # ── Recorte del lienzo con scroll SUB-PÍXEL ──────────────────────────
+        # Truncar el desplazamiento a un entero hacía que a baja velocidad
+        # (~1 px/frame) muchos frames no avanzaran nada y otros saltaran 2 px →
+        # se veía "a saltitos". Interpolando linealmente entre las dos filas
+        # vecinas el movimiento queda perfectamente continuo.
+        scroll_f = self._scroll_y_at(time_s) - self.playhead_y
+        scroll_f = min(max(scroll_f, 0.0), float(self.canvas_h - self.video_h))
+        fs = int(scroll_f)
+        frac = scroll_f - fs
+
+        a = self.canvas_np[fs:fs + self.video_h].astype(np.float32)
+        if frac > 1e-3 and fs + self.video_h < self.canvas_h:
+            b = self.canvas_np[fs + 1:fs + 1 + self.video_h].astype(np.float32)
+            frame = (a * (1.0 - frac) + b * frac).astype(np.uint8)
+        else:
+            frame = a.astype(np.uint8)
+        frame = np.ascontiguousarray(frame)
 
         # Compás activo
         t0, dur, fn, mi, beats, bpm = self._timeline_at(time_s)
         m_prog = min(1.0, max(0.0, (time_s - t0) / dur)) if dur > 0 else 0.0
         fidx  = self._fidx[fn]
         sys_i, mx0, mx1 = self.measure_map[fn][mi]
-        ct = self._sys_top(fn, fidx, sys_i) - fs
-        cb = self._sys_bot(fn, fidx, sys_i) - fs
+        ct = self._sys_top(fn, fidx, sys_i) - scroll_f
+        cb = self._sys_bot(fn, fidx, sys_i) - scroll_f
         pad = 18
         ht = max(0, int(ct) - pad)
         hb = min(self.video_h, int(cb) + pad)
@@ -927,39 +943,51 @@ class ScoreEngine:
         # primer compás la partitura está completamente limpia.
         in_count = self.lead_in > 0 and time_s < self.lead_in
         if in_count:
-            spb  = self.lead_in / self.count_beats
-            b    = min(self.count_beats - 1, int(time_s / spb))
-            bp   = (time_s - b * spb) / spb
+            slots = self.count_slots                 # count_beats + 1 (prep)
+            spb   = self.lead_in / slots
+            slot  = min(slots - 1, int(time_s / spb))
+            bp    = (time_s - slot * spb) / spb
+            is_prep = (slot == 0)                     # primer pulso = anticipación
+            # número que se muestra: prep→(nada); slots 1..N → N..1
+            number = None if is_prep else (self.count_beats - (slot - 1))
             fade = 1.0
-            if b == self.count_beats - 1 and bp > 0.6:
+            if slot == slots - 1 and bp > 0.6:        # desvanecer en el último
                 fade = max(0.0, 1.0 - (bp - 0.6) / 0.4)
-            veil = 0.45 * fade
+            veil = (0.30 if is_prep else 0.45) * fade
             if veil > 0.004:
                 frame[:] = (frame.astype(np.float32) * (1 - veil)
                             + 255.0 * veil).astype(np.uint8)
             f_pil = Image.fromarray(frame[..., ::-1])
             d = ImageDraw.Draw(f_pil, "RGBA")
-            num_alpha = fade * (0.60 + 0.40 * max(0.0, 1.0 - bp * 3.0))
             cx, cy = self.video_w // 2, int(self.video_h * 0.42)
-            txt = str(self.count_beats - b)
-            d.text((cx + 3, cy + 4), txt, font=self._font_count, anchor="mm",
-                   fill=(40, 40, 40, int(90 * num_alpha)))
-            d.text((cx, cy), txt, font=self._font_count, anchor="mm",
-                   fill=(255, 140, 0, int(255 * num_alpha)))
+            if number is not None:
+                num_alpha = fade * (0.60 + 0.40 * max(0.0, 1.0 - bp * 3.0))
+                txt = str(number)
+                d.text((cx + 3, cy + 4), txt, font=self._font_count, anchor="mm",
+                       fill=(40, 40, 40, int(90 * num_alpha)))
+                d.text((cx, cy), txt, font=self._font_count, anchor="mm",
+                       fill=(255, 140, 0, int(255 * num_alpha)))
+            else:
+                # anticipación: "¿Listo?" tenue, sin número que contar todavía
+                try:
+                    d.text((cx, cy), "¿Listo?", font=self._font_lg, anchor="mm",
+                           fill=(255, 200, 120, int(180 * (0.5 + 0.5 * bp))))
+                except Exception:
+                    pass
+            # puntos de progreso: uno por pulso contado; el pulso actual (slot-1)
+            # se resalta. En la anticipación todos van tenues.
             dr2, gap2 = 9, 36
             y_dots = cy + int(self.video_h * 0.42 * 0.55)
             x0d = cx - (self.count_beats * gap2) // 2
+            active = slot - 1                          # -1 durante la anticipación
             for i in range(self.count_beats):
                 cxd = x0d + i * gap2 + gap2 // 2
-                if i < b:
-                    col = (255, 140, 0, int(200 * fade))
-                    r_i = dr2
-                elif i == b:
-                    col = (255, 140, 0, int(255 * fade))
-                    r_i = dr2 + int(3 * max(0.0, 1.0 - bp * 2.0))
+                if i < active:
+                    col = (255, 140, 0, int(200 * fade)); r_i = dr2
+                elif i == active:
+                    col = (255, 140, 0, int(255 * fade)); r_i = dr2 + int(3 * max(0.0, 1.0 - bp * 2.0))
                 else:
-                    col = (150, 150, 150, int(140 * fade))
-                    r_i = dr2 - 2
+                    col = (150, 150, 150, int(140 * fade)); r_i = dr2 - 2
                 d.ellipse([(cxd - r_i, y_dots - r_i), (cxd + r_i, y_dots + r_i)],
                           fill=col)
             frame = np.array(f_pil)[..., ::-1].copy()
