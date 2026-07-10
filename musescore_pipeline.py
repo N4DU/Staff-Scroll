@@ -11,10 +11,11 @@ Responsibilities:
 
 Usage:
     from musescore_pipeline import process_mscz_files
+    from progress import Progress
     cfg = process_mscz_files(
         mscz_paths=["/path/to/1.mscz", "/path/to/2.mscz"],
         workdir="/tmp/job_abc123",
-        progress_cb=lambda pct, msg: print(f"{pct}% {msg}")
+        progress=Progress(web_cb),   # barras de consola + % de la web
     )
     # cfg is a dict ready for build_engine(cfg)
 """
@@ -122,20 +123,30 @@ def _check_single_page(out_dir, i, ext):
 
 # ─── main pipeline ────────────────────────────────────────────────────────────
 
-def process_mscz_files(mscz_paths, workdir, progress_cb=None):
+# Resolución (DPI) del PNG exportado. Explícita SIEMPRE: algunas versiones de
+# MuseScore exportan a resoluciones enormes (>130 megapíxeles por hoja), lo que
+# dispara advertencias de PIL y congela el pipeline minutos enteros al abrir y
+# reescalar las imágenes. 300 DPI ≈ 2500 px de ancho en A4: nítido incluso para
+# video 4K y órdenes de magnitud más rápido de procesar.
+PNG_DPI = 300
+
+
+def process_mscz_files(mscz_paths, workdir, progress=None):
     """
     Full pipeline: .mscz list → rendered assets → engine config dict.
 
     Args:
-        mscz_paths:  ordered list of .mscz file paths
-        workdir:     temp directory for this job (created if absent)
-        progress_cb: optional callable(percent:int, message:str)
+        mscz_paths: ordered list of .mscz file paths
+        workdir:    temp directory for this job (created if absent)
+        progress:   objeto progress.Progress del trabajo (opcional). Cada fase
+                    del pipeline dibuja su propia barra en consola — ver la
+                    guía en progress.py antes de agregar pasos nuevos.
 
     Returns:
         dict  ready to pass directly to score_engine.build_engine()
     """
-    def _prog(pct, msg):
-        if progress_cb: progress_cb(pct, msg)
+    from progress import Progress
+    progress = progress or Progress()
 
     os.makedirs(workdir, exist_ok=True)
     mscx_dir = os.path.join(workdir, "mscx")
@@ -144,44 +155,39 @@ def process_mscz_files(mscz_paths, workdir, progress_cb=None):
     for d in [mscx_dir, png_dir, svg_dir]:
         os.makedirs(d, exist_ok=True)
 
-    _prog(2, "Localizando MuseScore…")
-    mscore = find_musescore()
-
     n = len(mscz_paths)
     file_nums = list(range(1, n + 1))
 
     # Phase 1: extract + patch
-    for idx, mscz_path in enumerate(mscz_paths):
-        _prog(5 + idx * 5 // n, f"Extrayendo {Path(mscz_path).name}…")
-        mscx_path, _ = _extract_and_patch_mscz(mscz_path, mscx_dir)
-        # Rename to canonical template name
-        canonical = os.path.join(mscx_dir, f"{idx+1}-score.mscx")
-        if mscx_path != canonical:
-            shutil.move(mscx_path, canonical)
+    with progress.phase("Preparando partituras", span=(2, 8)) as ph:
+        mscore = find_musescore()
+        for idx, mscz_path in enumerate(mscz_paths):
+            mscx_path, _ = _extract_and_patch_mscz(mscz_path, mscx_dir)
+            # Rename to canonical template name
+            canonical = os.path.join(mscx_dir, f"{idx+1}-score.mscx")
+            if mscx_path != canonical:
+                shutil.move(mscx_path, canonical)
+            ph.update((idx + 1) / n, Path(mscz_path).name)
 
     # Phase 2: render PNG + SVG (one MuseScore call per file)
-    for idx, i in enumerate(file_nums):
-        base_pct = 15 + idx * 60 // n
-        _prog(base_pct, f"Renderizando página {i}/{n}…")
-        mscx = os.path.join(mscx_dir, f"{i}-score.mscx")
+    with progress.phase("Renderizando páginas (MuseScore)", span=(8, 72)) as ph:
+        for idx, i in enumerate(file_nums):
+            mscx = os.path.join(mscx_dir, f"{i}-score.mscx")
 
-        # PNG
-        png_out = os.path.join(png_dir, f"{i}-score.png")
-        r = _run_mscore(mscore, ["-o", png_out, mscx])
-        if r.returncode != 0 and "success" not in r.stdout.lower():
-            raise RuntimeError(f"MuseScore falló renderizando el PNG de la página {i}:\n{r.stderr[:500]}")
-        _check_single_page(png_dir, i, "png")
+            ph.update((idx * 2) / (n * 2), f"página {i}/{n} · PNG")
+            png_out = os.path.join(png_dir, f"{i}-score.png")
+            r = _run_mscore(mscore, ["-o", png_out, "-r", str(PNG_DPI), mscx])
+            if r.returncode != 0 and "success" not in r.stdout.lower():
+                raise RuntimeError(f"MuseScore falló renderizando el PNG de la página {i}:\n{r.stderr[:500]}")
+            _check_single_page(png_dir, i, "png")
 
-        # SVG
-        svg_out = os.path.join(svg_dir, f"{i}-score.svg")
-        r = _run_mscore(mscore, ["-o", svg_out, mscx])
-        if r.returncode != 0 and "success" not in r.stdout.lower():
-            raise RuntimeError(f"MuseScore falló renderizando el SVG de la página {i}:\n{r.stderr[:500]}")
-        _check_single_page(svg_dir, i, "svg")
-
-        _prog(base_pct + 55 // n, f"Página {i}/{n} renderizada ✓")
-
-    _prog(80, "Pipeline completo — preparando configuración del motor…")
+            ph.update((idx * 2 + 1) / (n * 2), f"página {i}/{n} · SVG")
+            svg_out = os.path.join(svg_dir, f"{i}-score.svg")
+            r = _run_mscore(mscore, ["-o", svg_out, mscx])
+            if r.returncode != 0 and "success" not in r.stdout.lower():
+                raise RuntimeError(f"MuseScore falló renderizando el SVG de la página {i}:\n{r.stderr[:500]}")
+            _check_single_page(svg_dir, i, "svg")
+            ph.update((idx + 1) / n, f"página {i}/{n} ✓")
 
     # Return engine config dict (all defaults, paths filled in)
     return {
