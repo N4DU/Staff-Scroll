@@ -195,10 +195,16 @@ def create_app():
 
 
 # ─── job runner ──────────────────────────────────────────────────────────────
+#
+# El progreso se reporta por PROCEDIMIENTO: cada paso del pipeline tiene su
+# propia barra en la consola (y aporta un tramo del % global de la web).
+# Antes de agregar un paso nuevo, leé la guía en progress.py — agregar la
+# barrita de tu paso son 3 líneas (`with progress.phase(...)`).
 
 def _run_job(job_id, options):
     from musescore_pipeline import process_mscz_files
     from score_engine import build_engine
+    from progress import Progress
 
     j = jobs[job_id]
 
@@ -206,17 +212,24 @@ def _run_job(job_id, options):
         j["pct"] = pct
         j["msg"] = msg
 
+    progress = Progress(web_cb=prog)
+    j["progress"] = progress
+    n_scores = len(j["mscz_paths"])
+    audio_note = " + canción" if j.get("audio_path") else ""
+    progress.announce(f"♪ Nuevo trabajo {job_id} — "
+                      f"{n_scores} partitura{'s' if n_scores != 1 else ''}{audio_note}")
+
     try:
         prog(2, "Iniciando pipeline…")
         workdir    = j["workdir"]
         mscz_paths = j["mscz_paths"]
         render_dir = os.path.join(workdir, "render")
 
-        # Phase 1: MuseScore pipeline (2% → 80%)
+        # Fases 1-2: pipeline de MuseScore (extraer + renderizar, 2% → 72%)
         engine_cfg = process_mscz_files(
             mscz_paths=mscz_paths,
             workdir=render_dir,
-            progress_cb=prog,
+            progress=progress,
         )
 
         # Merge user options into engine config
@@ -255,8 +268,8 @@ def _run_job(job_id, options):
             except (TypeError, ValueError):
                 pass
 
-        prog(81, "Construyendo motor de video…")
-        engine = build_engine(engine_cfg)
+        with progress.phase("Construyendo motor de video", span=(72, 82)) as ph:
+            engine = build_engine(engine_cfg, phase=ph)
 
         j["engine"]         = engine
         j["fps"]            = engine_cfg.get("fps", 30)
@@ -267,9 +280,9 @@ def _run_job(job_id, options):
         if j.get("audio_path"):
             # Con audio: el editor abre YA (no necesita el video) y el render
             # corre en segundo plano mientras el usuario alinea.
-            prog(85, "Analizando el audio (forma de onda y golpes)…")
             from audio_sync import analyze_audio
-            analysis = analyze_audio(_find_ffmpeg(), j["audio_path"])
+            with progress.phase("Analizando la canción", span=(82, 98)) as ph:
+                analysis = analyze_audio(_find_ffmpeg(), j["audio_path"], phase=ph)
             j["editor_data"] = _build_editor_data(engine, analysis)
             j["render"] = {"pct": 0, "done": False, "error": None, "path": None}
             threading.Thread(target=_render_silent, args=(job_id,), daemon=True).start()
@@ -277,18 +290,22 @@ def _run_job(job_id, options):
             j["pct"]  = 100
             j["msg"]  = "Partitura lista — abriendo editor de sincronización…"
             j["done"] = True
+            progress.announce("  Editor de sincronización listo — el video se "
+                              "renderiza en segundo plano.")
             return
 
         # Sin audio: renderizar directo como siempre
-        out_path = _render_video_frames(
-            j, engine,
-            lambda p: prog(82 + int(p * 0.17), f"Renderizando video… ({p}%)"))
+        with progress.phase("Renderizando el video", span=(82, 99)) as ph:
+            out_path = _render_video_frames(
+                j, engine, lambda p: ph.update(p / 100))
         j["output"] = out_path
         j["pct"]    = 100
         j["msg"]    = "¡Video listo para descargar!"
         j["done"]   = True
+        progress.announce("  ✔ Video listo para descargar desde la página.")
 
     except Exception as exc:
+        progress.error(exc)
         j["pct"]   = 0
         j["msg"]   = f"Error: {exc}"
         j["error"] = str(exc)
@@ -336,11 +353,18 @@ def _render_video_frames(j, engine, report):
 
 def _render_silent(job_id):
     """Render en segundo plano mientras el usuario usa el editor."""
+    from progress import Progress
     j = jobs[job_id]
     r = j["render"]
+    progress = j.get("progress") or Progress()
     try:
-        r["path"] = _render_video_frames(j, j["engine"],
-                                         lambda p: r.__setitem__("pct", p))
+        # span=None: esta barra vive solo en la consola; la barra de la web la
+        # maneja _run_finalize cuando el usuario confirma la sincronización.
+        with progress.phase("Renderizando el video (2º plano)", span=None) as ph:
+            def _report(p):
+                r["pct"] = p
+                ph.update(p / 100)
+            r["path"] = _render_video_frames(j, j["engine"], _report)
         r["pct"]  = 100
         r["done"] = True
     except Exception as exc:
@@ -390,6 +414,7 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
     """Espera el render en segundo plano y (si corresponde) mezcla el audio."""
     import time
     from audio_sync import run_mux
+    from progress import Progress
 
     j = jobs[job_id]
 
@@ -397,11 +422,19 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
         j["pct"] = pct
         j["msg"] = msg
 
+    progress = j.get("progress") or Progress(web_cb=prog)
+    progress.web_cb = prog
+    progress.reset()
+
     try:
         r = j["render"]
-        while not r["done"]:
-            prog(5 + int(r["pct"] * 0.75), f"Renderizando el video… ({r['pct']}%)")
-            time.sleep(0.3)
+        if not r["done"]:
+            # La barra de consola del render la dibuja su propio hilo
+            # (_render_silent); acá solo se refleja la espera en la web.
+            while not r["done"]:
+                prog(5 + int(r["pct"] * 0.75),
+                     f"Renderizando el video… ({r['pct']}%)")
+                time.sleep(0.3)
         if r["error"]:
             raise RuntimeError(r["error"])
 
@@ -409,25 +442,29 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
             j["output"] = r["path"]
             prog(100, "¡Video listo para descargar!")
             j["done"] = True
+            progress.announce("  ✔ Video (sin audio) listo para descargar.")
             return
 
-        prog(85, "Mezclando audio y video…")
-        final_path = os.path.join(j["workdir"], "scrolling_score_final.mp4")
-        run_mux(
-            _find_ffmpeg(),
-            video_path=r["path"],
-            audio_path=j["audio_path"],
-            out_path=final_path,
-            offset=offset,
-            stretch=stretch,
-            lead_in=j.get("lead_in", 0.0),
-            video_duration=j["video_duration"],
-        )
+        with progress.phase("Mezclando audio y video", span=(80, 99)) as ph:
+            ph.update(0.1, "ffmpeg")
+            final_path = os.path.join(j["workdir"], "scrolling_score_final.mp4")
+            run_mux(
+                _find_ffmpeg(),
+                video_path=r["path"],
+                audio_path=j["audio_path"],
+                out_path=final_path,
+                offset=offset,
+                stretch=stretch,
+                lead_in=j.get("lead_in", 0.0),
+                video_duration=j["video_duration"],
+            )
         j["output"] = final_path
         j["pct"]  = 100
         j["msg"]  = "¡Video final con audio listo para descargar!"
         j["done"] = True
+        progress.announce("  ✔ Video final con audio listo para descargar.")
     except Exception as exc:
+        progress.error(exc)
         j["pct"]   = 0
         j["msg"]   = f"Error: {exc}"
         j["error"] = str(exc)
@@ -437,10 +474,13 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
 
 
 def _find_ffmpeg():
-    # 1. Bundled in vendor/
-    vendor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "ffmpeg.exe")
-    if os.path.isfile(vendor):
-        return vendor
+    # 1. Bundled in vendor/ (el .exe solo sirve en Windows)
+    vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+    names = ["ffmpeg.exe"] if os.name == "nt" else ["ffmpeg"]
+    for name in names:
+        vendor = os.path.join(vendor_dir, name)
+        if os.path.isfile(vendor):
+            return vendor
     # 2. On PATH (works on Mac/Linux too)
     found = shutil.which("ffmpeg")
     if found:

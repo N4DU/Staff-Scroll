@@ -22,6 +22,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import xml.etree.ElementTree as ET
 
+# Los PNG que abrimos son SIEMPRE archivos locales renderizados por MuseScore
+# (no contenido de internet), así que el límite anti "decompression bomb" de
+# PIL solo genera advertencias alarmantes en la consola. Se sube el límite en
+# vez de desactivarlo: si una imagen supera esto, algo está realmente mal.
+Image.MAX_IMAGE_PIXELS = 300_000_000
+
 DEFAULT_CONFIG = {
     "bpm":             120,    # tempo de reserva si la partitura no lo indica
     "fps":             30,
@@ -491,15 +497,25 @@ class ScoreEngine:
     def __init__(self, cfg):
         self.cfg = cfg
 
-    def build(self):
+    def build(self, phase=None):
+        # `phase` (opcional): barra de progreso de este paso — ver progress.py.
+        # La construcción reparte su avance: 20 % parseo SVG/XML, 80 % carga y
+        # reescalado de las hojas PNG (lo más pesado).
+        def _ph(frac, detail=""):
+            if phase:
+                phase.update(frac, detail)
+
         cfg = self.cfg
         file_nums = cfg["file_nums"]
         tpl = cfg["name_tpl"]
 
+        _ph(0.02, "leyendo geometría (SVG)")
         self.layouts    = {i: _parse_svg_layout(f"{cfg['svg_dir']}/{tpl.format(i=i)}-1.svg")
                            for i in file_nums}
+        _ph(0.10, "leyendo la música (MSCX)")
         self.score_data = {i: _parse_score_xml(f"{cfg['mscx_dir']}/{tpl.format(i=i)}.mscx")
                            for i in file_nums}
+        _ph(0.20, "geometría por compás")
         self._fidx = {fn: idx for idx, fn in enumerate(file_nums)}
 
         # ── Geometría por compás ─────────────────────────────────────────────
@@ -617,6 +633,7 @@ class ScoreEngine:
         self.page_px = {}      # dimensiones del PNG original de cada página
         cropped_imgs = []
         for idx, i in enumerate(file_nums):
+            _ph(0.25 + 0.7 * idx / n_pages, f"cargando hoja {idx + 1}/{n_pages}")
             lay = self.layouts[i]
             top_edge, bot_edge = lay["tops"][0], lay["bottoms"][-1]
             if idx == 0:
@@ -668,6 +685,7 @@ class ScoreEngine:
         self.canvas_h  = total_h
 
         # Keyframes de scroll + línea de tiempo musical
+        _ph(0.96, "calculando el scroll")
         self._build_keyframes()
 
         # ── Conteo previo: desplaza toda la música `lead_in` segundos ────────
@@ -1059,6 +1077,6 @@ class ScoreEngine:
         return frame
 
 
-def build_engine(overrides=None):
+def build_engine(overrides=None, phase=None):
     cfg = {**DEFAULT_CONFIG, **(overrides or {})}
-    return ScoreEngine(cfg).build()
+    return ScoreEngine(cfg).build(phase=phase)
