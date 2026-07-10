@@ -95,13 +95,24 @@ def detect_onsets(samples, sr=_SR):
     return onsets
 
 
-def analyze_audio(ffmpeg_bin, audio_path):
-    """Análisis completo para el editor: duración, forma de onda y onsets."""
+def analyze_audio(ffmpeg_bin, audio_path, phase=None):
+    """Análisis completo para el editor: duración, forma de onda y onsets.
+    `phase` (opcional): barra de progreso de este paso — ver progress.py."""
+    def _ph(frac, detail=""):
+        if phase:
+            phase.update(frac, detail)
+
+    _ph(0.05, "decodificando la canción")
     samples, sr = decode_audio(ffmpeg_bin, audio_path)
+    _ph(0.55, "forma de onda")
+    wf = waveform_peaks(samples)
+    _ph(0.70, "detectando golpes")
+    onsets = detect_onsets(samples, sr)
+    _ph(0.98, f"{len(onsets)} golpes detectados")
     return {
         "duration": round(len(samples) / sr, 3),
-        "waveform": waveform_peaks(samples),
-        "onsets":   detect_onsets(samples, sr),
+        "waveform": wf,
+        "onsets":   onsets,
     }
 
 
