@@ -413,8 +413,7 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 #edSheet {
-  border-radius: 6px; border: 1px solid var(--border);
-  background: #fff; display: block;
+  display: block;   /* el canvas es transparente; sólo la hoja se pinta blanca */
 }
 #edSheet.zoomed { cursor: grab; }
 #edSheet.panning { cursor: grabbing; }
@@ -1031,6 +1030,8 @@ let edDiag = false;
 // zoom/pan de la HOJA (independiente del zoom de las tiras)
 let edSheetZoom = 1, edSheetPanX = 0, edSheetPanY = 0;
 let edSheetDrag = null;
+let edSheetSharp = false;         // ¿el bg ya está compuesto desde el original (nítido)?
+let edSharpTimer = null;
 
 // bitmaps cacheados (se reconstruyen sólo cuando cambian sus insumos, no por
 // frame → la reproducción queda fluida y el cambio de hoja es inmediato)
@@ -1203,9 +1204,13 @@ function rebuildSheetIfNeeded() {
   const dpr = window.devicePixelRatio || 1;
   const zoomed = edSheetZoom > 1.001;
   const bmReady = !!edPageBitmaps[edCurPage];
+  // Con zoom, el blit del bitmap pre-escalado es INSTANTÁNEO (respuesta
+  // inmediata a la rueda); la versión nítida desde el PNG original se compone
+  // recién cuando el zoom se detiene (edSheetSharp), evitando el tirón.
+  const useOriginal = zoomed && edSheetSharp;
   const key = [edCurPage, availW, availH, edSheetZoom.toFixed(3),
                Math.round(edSheetPanX), Math.round(edSheetPanY),
-               bmReady ? 1 : 0, zoomed ? 1 : 0, dpr].join("|");
+               bmReady ? 1 : 0, useOriginal ? 1 : 0, dpr].join("|");
   const bw = Math.round(availW * dpr), bh = Math.round(availH * dpr);
   if (ed.sheet.width !== bw || ed.sheet.height !== bh) {
     ed.sheet.width = bw; ed.sheet.height = bh;
@@ -1219,13 +1224,14 @@ function rebuildSheetIfNeeded() {
   }
   const bg = edSheetBg.getContext("2d");
   bg.setTransform(dpr, 0, 0, dpr, 0, 0);
-  bg.clearRect(0, 0, availW, availH);
+  bg.clearRect(0, 0, availW, availH);       // fuera de la hoja: transparente
   bg.fillStyle = "#fff"; bg.fillRect(ox, oy, pw, ph);
-  bg.imageSmoothingEnabled = true; bg.imageSmoothingQuality = "high";
+  bg.imageSmoothingEnabled = true;
+  // blit rápido (zoom en curso) → suavizado medio; nítido/estático → alto
+  bg.imageSmoothingQuality = useOriginal ? "high" : "medium";
   const bm = edPageBitmaps[edCurPage];
   const orig = edPageImgs[edCurPage];
-  if (zoomed && orig) {
-    // nítido al ampliar: reescala la banda desde el PNG original
+  if (useOriginal && orig) {
     const iw = orig.naturalWidth, ih = orig.naturalHeight;
     bg.drawImage(orig, 0, f.b0 * ih, iw, (f.b1 - f.b0) * ih, ox, oy, pw, ph);
   } else if (bm) {
@@ -1234,6 +1240,9 @@ function rebuildSheetIfNeeded() {
     const iw = orig.naturalWidth, ih = orig.naturalHeight;
     bg.drawImage(orig, 0, f.b0 * ih, iw, (f.b1 - f.b0) * ih, ox, oy, pw, ph);
   }
+  // borde sutil para que la hoja se lea como una tarjeta sobre el fondo oscuro
+  bg.strokeStyle = "rgba(0,0,0,0.22)"; bg.lineWidth = 1;
+  bg.strokeRect(ox + 0.5, oy + 0.5, pw - 1, ph - 1);
 }
 
 function drawSheet() {
@@ -1322,6 +1331,17 @@ ed.nextPage.addEventListener("click", () => {
 // ── zoom / pan de la hoja ────────────────────────────────────────────────────
 // Zoom centrado en el puntero (rueda) o en el centro (botones); el pan fino
 // se hace arrastrando la hoja cuando hay zoom.
+// Afinado diferido: mientras se hace zoom/pan se muestra el blit rápido; la
+// versión nítida desde el PNG original se compone ~130 ms después de parar.
+function scheduleSharpen() {
+  clearTimeout(edSharpTimer);
+  if (edSheetZoom <= 1.001) return;
+  edSharpTimer = setTimeout(() => {
+    edSheetSharp = true;
+    edSheetKey = "";
+    drawSheet();
+  }, 130);
+}
 function zoomSheet(factor, pivotX, pivotY) {
   const L = edSheetLayout;
   const nz = Math.min(6, Math.max(1, edSheetZoom * factor));
@@ -1339,8 +1359,10 @@ function zoomSheet(factor, pivotX, pivotY) {
   edSheetZoom = nz;
   ed.sheet.classList.toggle("zoomed", edSheetZoom > 1.001);
   if (edSheetZoom <= 1.001) { edSheetPanX = edSheetPanY = 0; }
+  edSheetSharp = false;        // blit rápido ahora; nítido tras detenerse
   edSheetKey = "";
   drawSheet();
+  scheduleSharpen();
 }
 ed.sheet.addEventListener("wheel", e => {
   e.preventDefault();
@@ -1349,7 +1371,7 @@ ed.sheet.addEventListener("wheel", e => {
 }, { passive: false });
 ed.zScoreIn.addEventListener("click", () => { const L = edSheetLayout; zoomSheet(1.3, L ? L.cvW / 2 : null, L ? L.cvH / 2 : null); });
 ed.zScoreOut.addEventListener("click", () => { const L = edSheetLayout; zoomSheet(1 / 1.3, L ? L.cvW / 2 : null, L ? L.cvH / 2 : null); });
-ed.zScoreRst.addEventListener("click", () => { edSheetZoom = 1; edSheetPanX = edSheetPanY = 0; ed.sheet.classList.remove("zoomed"); edSheetKey = ""; drawSheet(); });
+ed.zScoreRst.addEventListener("click", () => { clearTimeout(edSharpTimer); edSheetZoom = 1; edSheetPanX = edSheetPanY = 0; edSheetSharp = false; ed.sheet.classList.remove("zoomed"); edSheetKey = ""; drawSheet(); });
 
 // pan de la hoja arrastrando (sólo cuando hay zoom)
 ed.sheet.addEventListener("mousedown", e => {
@@ -1362,8 +1384,10 @@ window.addEventListener("mousemove", e => {
   if (!edSheetDrag) return;
   edSheetPanX = edSheetDrag.px + (e.clientX - edSheetDrag.x);
   edSheetPanY = edSheetDrag.py + (e.clientY - edSheetDrag.y);
+  edSheetSharp = false;        // blit rápido mientras se arrastra
   edSheetKey = "";
   drawSheet();
+  scheduleSharpen();
 });
 window.addEventListener("mouseup", () => {
   if (edSheetDrag) { edSheetDrag = null; ed.sheet.classList.remove("panning"); }
