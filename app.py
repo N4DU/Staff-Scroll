@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import shutil
 import threading
@@ -221,8 +222,6 @@ def _run_job(job_id, options):
         # Merge user options into engine config
         if options.get("show_header") is False:
             engine_cfg["show_header"] = False
-        if options.get("show_playhead") is False:
-            engine_cfg["playhead_w"] = 0
         if "page_gap_pct" in options:
             engine_cfg["page_gap_pct"] = min(100.0, max(0.0, float(options["page_gap_pct"])))
         if "playhead_frac" in options:
@@ -231,6 +230,30 @@ def _run_job(job_id, options):
             engine_cfg["count_in_beats"] = max(0, min(16, int(options["count_in_beats"])))
         if options.get("song_name"):
             engine_cfg["song_name"] = str(options["song_name"])
+
+        # Línea de tiempo (playhead): estilo configurable
+        if options.get("playhead_mode") in ("fluid", "beats"):
+            engine_cfg["playhead_mode"] = options["playhead_mode"]
+        col = options.get("playhead_color")
+        if isinstance(col, str) and re.fullmatch(r"#?[0-9a-fA-F]{6}", col):
+            c = col.lstrip("#")
+            engine_cfg["playhead_color"] = tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+        if "playhead_alpha" in options:
+            engine_cfg["playhead_alpha"] = min(1.0, max(0.05, float(options["playhead_alpha"])))
+        if "playhead_w" in options:
+            engine_cfg["playhead_w"] = max(1, min(8, int(options["playhead_w"])))
+        if options.get("show_playhead") is False:
+            engine_cfg["playhead_w"] = 0
+
+        # Resolución del dispositivo destino (par: se exige para yuv420p)
+        if options.get("video_w") and options.get("video_h"):
+            try:
+                w = max(320, min(3840, int(options["video_w"])))
+                h = max(240, min(2160, int(options["video_h"])))
+                engine_cfg["video_w"] = w - (w % 2)
+                engine_cfg["video_h"] = h - (h % 2)
+            except (TypeError, ValueError):
+                pass
 
         prog(81, "Construyendo motor de video…")
         engine = build_engine(engine_cfg)
