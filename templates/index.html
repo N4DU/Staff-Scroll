@@ -221,6 +221,72 @@ body {
 /* al desactivar el encabezado, el nombre no aplica */
 .options-panel.no-header #songNameRow { opacity: 0.4; pointer-events: none; }
 
+/* ── Ventana de configuración ── */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(3px);
+  display: none; align-items: center; justify-content: center;
+}
+.settings-overlay.visible { display: flex; }
+.settings-win {
+  width: min(880px, 94vw); height: min(600px, 88vh);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; overflow: hidden;
+  display: grid; grid-template-columns: 210px 1fr;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+}
+.settings-nav {
+  background: var(--bg); border-right: 1px solid var(--border);
+  padding: 16px 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.settings-title {
+  font-size: 1rem; font-weight: 700; color: var(--orange);
+  padding: 4px 10px 12px;
+}
+.set-cat {
+  text-align: left; background: none; border: none; color: var(--muted);
+  font-size: 0.9rem; padding: 9px 12px; border-radius: 8px; cursor: pointer;
+}
+.set-cat:hover { background: var(--surface2); color: var(--text); }
+.set-cat.active { background: rgba(255,165,0,0.14); color: var(--orange); font-weight: 600; }
+.settings-body {
+  padding: 22px 26px; overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.set-pane { display: none; flex-direction: column; gap: 20px; }
+.set-pane.active { display: flex; }
+.set-h { font-size: 1.05rem; color: var(--text); margin-bottom: 2px; }
+
+.seg-row { display: flex; gap: 8px; }
+.radio-chip input { display: none; }
+.radio-chip span {
+  display: inline-block; padding: 8px 14px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2);
+  color: var(--muted); font-size: 0.85rem; cursor: pointer;
+}
+.radio-chip input:checked + span {
+  border-color: var(--orange); color: var(--orange);
+  background: rgba(255,165,0,0.12); font-weight: 600;
+}
+.opt-grid { display: grid; grid-template-columns: auto 1fr 1fr; gap: 18px; align-items: start; }
+.color-input {
+  width: 54px; height: 34px; padding: 2px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface2); cursor: pointer;
+}
+#phPreview {
+  width: 100%; max-width: 560px; border-radius: 8px;
+  border: 1px solid var(--border); background: #fff; display: block;
+}
+.res-custom { display: none; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); }
+.res-custom.visible { display: flex; }
+.res-custom .text-input { width: 110px; }
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .settings-win { grid-template-columns: 1fr; height: 92vh; }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  .settings-title, .settings-nav > div { display: none; }
+}
+
 /* Checkbox */
 .checkbox-row {
   display: flex;
@@ -512,65 +578,160 @@ body {
     <div id="fileList"></div>
   </section>
 
-  <!-- Options Toggle + Panel -->
-  <div>
-    <button class="options-toggle" id="optionsToggle" type="button">
-      <span>Opciones avanzadas</span>
-      <span class="arrow">&#9660;</span>
-    </button>
-    <div class="options-panel" id="optionsPanel">
+  <!-- Configuración: botón + ventana modal -->
+  <button class="options-toggle" id="optionsToggle" type="button">
+    <span>&#9881;&nbsp; Configuraci&oacute;n del video</span>
+    <span class="arrow">&#8250;</span>
+  </button>
 
-      <label class="checkbox-row">
-        <input type="checkbox" id="optHeader" checked>
-        <span>
-          <span class="opt-label">Mostrar encabezado</span><br>
-          <span class="opt-desc">Barra con nombre de la canción y BPM</span>
-        </span>
-      </label>
+  <div class="settings-overlay" id="settingsModal">
+    <div class="settings-win">
+      <aside class="settings-nav">
+        <div class="settings-title">Configuraci&oacute;n</div>
+        <button class="set-cat active" data-cat="video" type="button">&#127916; Video</button>
+        <button class="set-cat" data-cat="playhead" type="button">&#128204; L&iacute;nea de tiempo</button>
+        <button class="set-cat" data-cat="count" type="button">&#129345; Conteo previo</button>
+        <button class="set-cat" data-cat="device" type="button">&#128421; Dispositivo</button>
+        <button class="set-cat" data-cat="defaults" type="button">&#128190; Por defecto</button>
+        <div style="flex:1"></div>
+        <button class="ed-btn primary" id="settingsClose" type="button">Listo</button>
+      </aside>
+      <section class="settings-body" id="optionsPanel">
 
-      <div class="opt-row" id="songNameRow">
-        <div class="opt-label">Nombre de la canción</div>
-        <div class="opt-desc">Aparece centrado en el encabezado del video. Si lo dejás vacío se intenta tomar el título de la partitura.</div>
-        <input type="text" id="optSongName" class="text-input" placeholder="Nombre de la canción…" maxlength="80">
-      </div>
+        <!-- ── Video ── -->
+        <div class="set-pane active" data-pane="video">
+          <h3 class="set-h">Video</h3>
 
-      <label class="checkbox-row">
-        <input type="checkbox" id="optPlayhead" checked>
-        <span>
-          <span class="opt-label">Mostrar línea de playhead</span><br>
-          <span class="opt-desc">Línea naranja vertical que sigue el compás</span>
-        </span>
-      </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="optHeader" checked>
+            <span>
+              <span class="opt-label">Mostrar encabezado</span><br>
+              <span class="opt-desc">Barra con nombre de la canci&oacute;n y BPM</span>
+            </span>
+          </label>
 
-      <div class="opt-row">
-        <div class="opt-label">Brecha entre páginas</div>
-        <div class="opt-desc">Cuánto contenido se conserva en la unión entre hojas: 0&nbsp;% recorta justo al borde del pentagrama (máxima continuidad, puede cortar símbolos); 100&nbsp;% conserva las hojas completas (nunca corta nada, más espacio en blanco).</div>
-        <div class="slider-row">
-          <input type="range" id="optPageGap" min="0" max="100" value="30" step="5">
-          <span class="slider-value" id="optPageGapVal">30 %</span>
+          <div class="opt-row" id="songNameRow">
+            <div class="opt-label">Nombre de la canci&oacute;n</div>
+            <div class="opt-desc">Aparece centrado en el encabezado del video. Si lo dej&aacute;s vac&iacute;o se intenta tomar el t&iacute;tulo de la partitura.</div>
+            <input type="text" id="optSongName" class="text-input" placeholder="Nombre de la canci&oacute;n&hellip;" maxlength="80">
+          </div>
+
+          <div class="opt-row">
+            <div class="opt-label">Brecha entre p&aacute;ginas</div>
+            <div class="opt-desc">Cu&aacute;nto contenido se conserva en la uni&oacute;n entre hojas: 0&nbsp;% recorta justo al borde del pentagrama (m&aacute;xima continuidad); 100&nbsp;% conserva las hojas completas (nunca corta nada).</div>
+            <div class="slider-row">
+              <input type="range" id="optPageGap" min="0" max="100" value="30" step="5">
+              <span class="slider-value" id="optPageGapVal">30 %</span>
+            </div>
+            <div class="slider-labels"><span>Continuo</span><span>Sin recorte</span></div>
+          </div>
         </div>
-        <div class="slider-labels"><span>Continuo</span><span>Sin recorte</span></div>
-      </div>
 
-      <div class="opt-row">
-        <div class="opt-label">Conteo previo</div>
-        <div class="opt-desc">Pulsos de preparaci&oacute;n antes de que arranque la partitura, al tempo exacto de la canci&oacute;n. As&iacute; ten&eacute;s tiempo de reaccionar al darle play.</div>
-        <div class="slider-row">
-          <input type="range" id="optCountIn" min="0" max="8" value="4" step="1">
-          <span class="slider-value" id="optCountInVal">4 tiempos</span>
+        <!-- ── Línea de tiempo (playhead) ── -->
+        <div class="set-pane" data-pane="playhead">
+          <h3 class="set-h">L&iacute;nea de tiempo</h3>
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="optPlayhead" checked>
+            <span>
+              <span class="opt-label">Mostrar l&iacute;nea de tiempo</span><br>
+              <span class="opt-desc">L&iacute;nea vertical que marca por d&oacute;nde va la m&uacute;sica</span>
+            </span>
+          </label>
+
+          <div class="opt-row">
+            <div class="opt-label">Movimiento</div>
+            <div class="seg-row">
+              <label class="radio-chip"><input type="radio" name="phMode" value="fluid" checked><span>Fluido</span></label>
+              <label class="radio-chip"><input type="radio" name="phMode" value="beats"><span>De a saltitos (por tiempo)</span></label>
+            </div>
+          </div>
+
+          <div class="opt-grid">
+            <div class="opt-row">
+              <div class="opt-label">Color</div>
+              <input type="color" id="optPhColor" value="#ff9b00" class="color-input">
+            </div>
+            <div class="opt-row">
+              <div class="opt-label">Transparencia</div>
+              <div class="slider-row">
+                <input type="range" id="optPhAlpha" min="10" max="100" value="100" step="5">
+                <span class="slider-value" id="optPhAlphaVal">100 %</span>
+              </div>
+            </div>
+            <div class="opt-row">
+              <div class="opt-label">Grosor</div>
+              <div class="slider-row">
+                <input type="range" id="optPhWidth" min="1" max="8" value="3" step="1">
+                <span class="slider-value" id="optPhWidthVal">3</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="opt-row">
+            <div class="opt-label">Posici&oacute;n de la l&iacute;nea lectora</div>
+            <div class="slider-row">
+              <input type="range" id="optPlayheadFrac" min="0" max="100" value="50" step="5">
+              <span class="slider-value" id="optPlayheadFracVal">Centro</span>
+            </div>
+            <div class="slider-labels"><span>Arriba</span><span>Centro</span><span>Abajo</span></div>
+          </div>
+
+          <div class="opt-row">
+            <div class="opt-label">Vista previa</div>
+            <canvas id="phPreview" width="560" height="110"></canvas>
+          </div>
         </div>
-        <div class="slider-labels"><span>Sin conteo</span><span>8 tiempos</span></div>
-      </div>
 
-      <div class="opt-row">
-        <div class="opt-label">Posición de la línea lectora</div>
-        <div class="slider-row">
-          <input type="range" id="optPlayheadFrac" min="0" max="100" value="50" step="5">
-          <span class="slider-value" id="optPlayheadFracVal">Centro</span>
+        <!-- ── Conteo previo ── -->
+        <div class="set-pane" data-pane="count">
+          <h3 class="set-h">Conteo previo</h3>
+          <div class="opt-row">
+            <div class="opt-desc">Pulsos de preparaci&oacute;n antes de que arranque la partitura, al tempo exacto de la canci&oacute;n (con un &iexcl;listo? de anticipaci&oacute;n). As&iacute; ten&eacute;s tiempo de reaccionar al darle play.</div>
+            <div class="slider-row">
+              <input type="range" id="optCountIn" min="0" max="8" value="4" step="1">
+              <span class="slider-value" id="optCountInVal">4 tiempos</span>
+            </div>
+            <div class="slider-labels"><span>Sin conteo</span><span>8 tiempos</span></div>
+          </div>
         </div>
-        <div class="slider-labels"><span>Arriba</span><span>Centro</span><span>Abajo</span></div>
-      </div>
 
+        <!-- ── Dispositivo ── -->
+        <div class="set-pane" data-pane="device">
+          <h3 class="set-h">Dispositivo</h3>
+          <div class="opt-row">
+            <div class="opt-label">Resoluci&oacute;n de la pantalla destino</div>
+            <div class="opt-desc">La resoluci&oacute;n del dispositivo donde vas a mostrar el video (tele, monitor, tablet&hellip;). El video se genera exactamente a ese tama&ntilde;o, con la partitura escalada de forma ideal &mdash; sea una tele muy ancha o un monitor cuadrado.</div>
+            <select id="optResPreset" class="text-input">
+              <option value="auto" selected>Autom&aacute;tica (seg&uacute;n la partitura)</option>
+              <option value="1920x1080">Full HD &mdash; 1920 &times; 1080</option>
+              <option value="1280x720">HD &mdash; 1280 &times; 720</option>
+              <option value="3840x2160">4K &mdash; 3840 &times; 2160</option>
+              <option value="1080x1920">Vertical (celular) &mdash; 1080 &times; 1920</option>
+              <option value="1080x1080">Cuadrada &mdash; 1080 &times; 1080</option>
+              <option value="custom">Personalizada&hellip;</option>
+            </select>
+            <div class="res-custom" id="resCustomRow">
+              <input type="number" id="optResW" class="text-input" min="320" max="3840" step="2" value="1920"> &times;
+              <input type="number" id="optResH" class="text-input" min="240" max="2160" step="2" value="1080"> px
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Valores por defecto ── -->
+        <div class="set-pane" data-pane="defaults">
+          <h3 class="set-h">Valores por defecto</h3>
+          <div class="opt-row">
+            <div class="opt-desc">Guard&aacute; la configuraci&oacute;n actual para que aparezca as&iacute; cada vez que abras el programa (se guarda en este navegador).</div>
+            <div class="btn-row">
+              <button class="ed-btn primary" id="btnSaveDefaults" type="button">&#128190; Guardar como predeterminada</button>
+              <button class="ed-btn" id="btnFactoryDefaults" type="button">Restaurar valores de f&aacute;brica</button>
+            </div>
+            <div class="opt-desc" id="defaultsMsg" style="min-height:1.2em"></div>
+          </div>
+        </div>
+
+      </section>
     </div>
   </div>
 
@@ -817,26 +978,63 @@ function renderFileList() {
   });
 }
 
-// ─── options ─────────────────────────────────────────────────────────────────
-optToggle.addEventListener("click", () => {
-  optToggle.classList.toggle("open");
-  optPanel.classList.toggle("open");
+// ─── configuración (ventana modal) ───────────────────────────────────────────
+const settingsModal = document.getElementById("settingsModal");
+const settingsClose = document.getElementById("settingsClose");
+const optCountIn    = document.getElementById("optCountIn");
+const optCountInVal = document.getElementById("optCountInVal");
+const optPhColor    = document.getElementById("optPhColor");
+const optPhAlpha    = document.getElementById("optPhAlpha");
+const optPhAlphaVal = document.getElementById("optPhAlphaVal");
+const optPhWidth    = document.getElementById("optPhWidth");
+const optPhWidthVal = document.getElementById("optPhWidthVal");
+const optResPreset  = document.getElementById("optResPreset");
+const optResW       = document.getElementById("optResW");
+const optResH       = document.getElementById("optResH");
+const resCustomRow  = document.getElementById("resCustomRow");
+
+function phMode() {
+  const r = document.querySelector('input[name="phMode"]:checked');
+  return r ? r.value : "fluid";
+}
+
+let phPrevRAF = null;
+function openSettings() {
+  settingsModal.classList.add("visible");
+  if (!phPrevRAF) phPrevRAF = requestAnimationFrame(drawPhPreview);
+}
+function closeSettings() {
+  settingsModal.classList.remove("visible");
+  if (phPrevRAF) { cancelAnimationFrame(phPrevRAF); phPrevRAF = null; }
+}
+optToggle.addEventListener("click", openSettings);
+settingsClose.addEventListener("click", closeSettings);
+settingsModal.addEventListener("click", e => { if (e.target === settingsModal) closeSettings(); });
+
+// categorías
+document.querySelectorAll(".set-cat").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".set-cat").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".set-pane").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelector(`.set-pane[data-pane="${btn.dataset.cat}"]`).classList.add("active");
+  });
 });
 
 optPageGap.addEventListener("input", () => {
   optPageGapVal.textContent = optPageGap.value + " %";
 });
-
-// atenuar el nombre de la canción cuando el encabezado está desactivado
 optHeader.addEventListener("change", () => {
   optPanel.classList.toggle("no-header", !optHeader.checked);
 });
-
-const optCountIn    = document.getElementById("optCountIn");
-const optCountInVal = document.getElementById("optCountInVal");
 optCountIn.addEventListener("input", () => {
   const v = parseInt(optCountIn.value);
   optCountInVal.textContent = v === 0 ? "Sin conteo" : v === 1 ? "1 tiempo" : v + " tiempos";
+});
+optPhAlpha.addEventListener("input", () => { optPhAlphaVal.textContent = optPhAlpha.value + " %"; });
+optPhWidth.addEventListener("input", () => { optPhWidthVal.textContent = optPhWidth.value; });
+optResPreset.addEventListener("change", () => {
+  resCustomRow.classList.toggle("visible", optResPreset.value === "custom");
 });
 
 function fracLabel(v) {
@@ -847,6 +1045,107 @@ function fracLabel(v) {
 }
 optFrac.addEventListener("input", () => {
   optFracVal.textContent = fracLabel(parseInt(optFrac.value));
+});
+
+// resolución elegida → {w, h} o null (automática)
+function chosenResolution() {
+  const v = optResPreset.value;
+  if (v === "auto") return null;
+  if (v === "custom") {
+    const w = parseInt(optResW.value), h = parseInt(optResH.value);
+    return (w >= 320 && h >= 240) ? { w, h } : null;
+  }
+  const [w, h] = v.split("x").map(Number);
+  return { w, h };
+}
+
+// ── vista previa animada de la línea de tiempo ───────────────────────────────
+function drawPhPreview(ts) {
+  const c = document.getElementById("phPreview");
+  const ctx = c.getContext("2d");
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+  // pentagrama de juguete
+  ctx.strokeStyle = "#333"; ctx.lineWidth = 1;
+  for (let l = 0; l < 5; l++) {
+    const y = 35 + l * 10;
+    ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(W - 20, y); ctx.stroke();
+  }
+  const noteXs = [70, 190, 310, 430];
+  ctx.fillStyle = "#111";
+  for (const x of noteXs) {
+    ctx.beginPath(); ctx.ellipse(x, 55, 6.5, 5, -0.3, 0, 7); ctx.fill();
+    ctx.fillRect(x + 5, 20, 1.6, 34);
+  }
+  // línea según la config elegida (bucle de 4 tiempos, 2 s)
+  const p = (ts % 2000) / 2000;
+  let x;
+  if (phMode() === "beats") x = noteXs[Math.min(3, Math.floor(p * 4))];
+  else {
+    const seg = Math.min(3, Math.floor(p * 4)), f = p * 4 - seg;
+    x = noteXs[seg] + f * ((noteXs[seg + 1] || W - 40) - noteXs[seg]);
+  }
+  ctx.globalAlpha = parseInt(optPhAlpha.value) / 100;
+  ctx.strokeStyle = optPhColor.value;
+  ctx.lineWidth = parseInt(optPhWidth.value) * 2;
+  ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, H - 12); ctx.stroke();
+  ctx.globalAlpha = 1;
+  phPrevRAF = requestAnimationFrame(drawPhPreview);
+}
+
+// ── valores por defecto (localStorage) ───────────────────────────────────────
+const FACTORY = {
+  header: true, songName: "", playhead: true, pageGap: 30, countIn: 4,
+  frac: 50, phMode: "fluid", phColor: "#ff9b00", phAlpha: 100, phWidth: 3,
+  resPreset: "auto", resW: 1920, resH: 1080,
+};
+function gatherSettings() {
+  return {
+    header: optHeader.checked, songName: optSongName.value,
+    playhead: optPlayhead.checked, pageGap: parseInt(optPageGap.value),
+    countIn: parseInt(optCountIn.value), frac: parseInt(optFrac.value),
+    phMode: phMode(), phColor: optPhColor.value,
+    phAlpha: parseInt(optPhAlpha.value), phWidth: parseInt(optPhWidth.value),
+    resPreset: optResPreset.value, resW: parseInt(optResW.value) || 1920,
+    resH: parseInt(optResH.value) || 1080,
+  };
+}
+function applySettings(s) {
+  optHeader.checked = !!s.header;
+  optPanel.classList.toggle("no-header", !s.header);
+  optSongName.value = s.songName || "";
+  optPlayhead.checked = !!s.playhead;
+  optPageGap.value = s.pageGap; optPageGapVal.textContent = s.pageGap + " %";
+  optCountIn.value = s.countIn;
+  optCountInVal.textContent = s.countIn === 0 ? "Sin conteo" : s.countIn === 1 ? "1 tiempo" : s.countIn + " tiempos";
+  optFrac.value = s.frac; optFracVal.textContent = fracLabel(s.frac);
+  const r = document.querySelector(`input[name="phMode"][value="${s.phMode}"]`);
+  if (r) r.checked = true;
+  optPhColor.value = s.phColor;
+  optPhAlpha.value = s.phAlpha; optPhAlphaVal.textContent = s.phAlpha + " %";
+  optPhWidth.value = s.phWidth; optPhWidthVal.textContent = s.phWidth;
+  optResPreset.value = s.resPreset || "auto";
+  optResW.value = s.resW; optResH.value = s.resH;
+  resCustomRow.classList.toggle("visible", s.resPreset === "custom");
+}
+(function loadDefaults() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem("ss_defaults") || "null"); } catch (e) {}
+  applySettings({ ...FACTORY, ...(stored || {}) });
+})();
+document.getElementById("btnSaveDefaults").addEventListener("click", () => {
+  try {
+    localStorage.setItem("ss_defaults", JSON.stringify(gatherSettings()));
+    document.getElementById("defaultsMsg").textContent = "✓ Guardado: así va a aparecer cada vez que abras el programa.";
+  } catch (e) {
+    document.getElementById("defaultsMsg").textContent = "No se pudo guardar en este navegador.";
+  }
+});
+document.getElementById("btnFactoryDefaults").addEventListener("click", () => {
+  try { localStorage.removeItem("ss_defaults"); } catch (e) {}
+  applySettings(FACTORY);
+  document.getElementById("defaultsMsg").textContent = "Valores de fábrica restaurados.";
 });
 
 // ─── generate ────────────────────────────────────────────────────────────────
@@ -874,6 +1173,7 @@ btnGenerate.addEventListener("click", async () => {
   currentJobId = uploadRes.job_id;
 
   // 2. Start generate
+  const res = chosenResolution();
   const options = {
     show_header:       optHeader.checked,
     show_playhead:     optPlayhead.checked,
@@ -881,6 +1181,11 @@ btnGenerate.addEventListener("click", async () => {
     playhead_frac:     parseInt(optFrac.value) / 100,
     count_in_beats:    parseInt(optCountIn.value),
     song_name:         optSongName.value.trim(),
+    playhead_mode:     phMode(),
+    playhead_color:    optPhColor.value,
+    playhead_alpha:    parseInt(optPhAlpha.value) / 100,
+    playhead_w:        parseInt(optPhWidth.value),
+    ...(res ? { video_w: res.w, video_h: res.h } : {}),
   };
 
   try {
@@ -1047,8 +1352,17 @@ const offset  = () => edS - edA;
 const beatDur = () => 60 / (edData ? edData.score_bpm : 120);
 const xOfSig  = s => (s - edView) * edZoom;
 const sigOfX  = x => edView + x / edZoom;
-const curSig  = () => edAudio.currentTime + edA;
+let edCursor = 0;                 // cursor virtual (σ): puede ir donde la
+                                  // PARTITURA o la CANCIÓN existan, no sólo
+                                  // dentro del rango del audio
+const curSig  = () => edCursor;
 const curMusic = () => curSig() - edS;
+function sigBounds() {
+  // límites del cursor: desde el primer inicio (partitura con su conteo, o
+  // canción) hasta el último final de ambas tiras
+  return [Math.min(edA, edS - edData.lead_in),
+          Math.max(edA + edData.audio.duration, edS + edData.music_duration)];
+}
 
 function buildBeatGrid() {
   edBeats = [];
@@ -1074,7 +1388,7 @@ function openEditor(jobId) {
   currentJobId = jobId;
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
-    edS = 0; edA = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
+    edS = 0; edA = 0; edCursor = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     buildBeatGrid();
@@ -1283,7 +1597,10 @@ function drawSheet() {
   const m = measureAt(tau);
   if (!m || m.page !== edCurPage) return;
   const nb = Math.max(1, Math.round(m.beats));
-  const bi = Math.min(nb - 1, Math.max(0, Math.floor((tau - m.t) / m.dur * nb)));
+  // +0.05 de tolerancia: si el cursor quedó un pelo ANTES del tiempo (error de
+  // flotantes al imantar, o colocado a mano apenas atrás), se muestra ESE
+  // tiempo y no el anterior.
+  const bi = Math.min(nb - 1, Math.max(0, Math.floor((tau - m.t) / m.dur * nb + 0.05)));
   const bpos = bi * m.beats / nb;
   let xf;
   if (m.hx && m.hx.length) {
@@ -1562,12 +1879,15 @@ function updateAll() {
 // ── reproducción ─────────────────────────────────────────────────────────────
 function tick() {
   if (edAudio.paused) { edRAF = null; return; }
+  edCursor = edAudio.currentTime + edA;   // reproduciendo, el audio manda
   updateAll();
   edRAF = requestAnimationFrame(tick);
 }
 function playFromSig(sig) {
   edFollow = true;
-  edAudio.currentTime = Math.min(Math.max(sig - edA, 0), edData.audio.duration - 0.1);
+  const [lo, hi] = sigBounds();
+  edCursor = Math.min(Math.max(sig, lo), hi);
+  edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
   edAudio.play().then(() => {
     ed.play.innerHTML = "&#10074;&#10074; Pausar";
     if (!edRAF) edRAF = requestAnimationFrame(tick);
@@ -1589,7 +1909,10 @@ ed.testEnd.addEventListener("click", () => {
 
 function seekToSig(sig, magnet) {
   if (magnet && ed.snap.checked) sig = edS + nearestBeat(sig - edS);
-  edAudio.currentTime = Math.min(Math.max(sig - edA, 0), edData.audio.duration - 0.1);
+  const [lo, hi] = sigBounds();
+  edCursor = Math.min(Math.max(sig, lo), hi);
+  // el audio sólo puede posicionarse dentro de su propio rango
+  edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
 }
 
 // ── interacción con las tiras ────────────────────────────────────────────────
@@ -1629,7 +1952,9 @@ window.addEventListener("mousemove", e => {
     edTracksKey = "";
   } else {
     edA = edDrag.A0 + dSec;
-    edAudio.currentTime = Math.min(Math.max(edDrag.sig0 - edA, 0), edData.audio.duration - 0.1);
+    // el cursor queda anclado a la PARTITURA: no se toca edCursor; el audio
+    // se recoloca a su posición equivalente (recortada a su propio rango)
+    edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
     edTracksKey = "";
   }
   updateAll();
@@ -1664,6 +1989,10 @@ ed.zoomOut.addEventListener("click", () => zoomAt(1 / 1.5, ed.tracks.clientWidth
 ed.zoomAll.addEventListener("click", fitAll);
 
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && settingsModal.classList.contains("visible")) {
+    closeSettings();
+    return;
+  }
   if (!ed.el.classList.contains("visible") || !edData) return;
   if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {

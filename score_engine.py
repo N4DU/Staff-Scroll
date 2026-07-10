@@ -36,6 +36,11 @@ DEFAULT_CONFIG = {
     "bg":              (255, 255, 255),  # fondo del lienzo = blanco → uniones limpias
     "playhead_color":  (255, 155, 0),
     "playhead_w":      3,
+    # Movimiento de la línea: "fluid" = continuo, "beats" = salta de a tiempos
+    "playhead_mode":   "fluid",
+    "playhead_alpha":  1.0,     # 1.0 = opaca … 0.05 = casi invisible
+    # Resolución de salida: video_h=None → se calcula de n_visible_lines
+    "video_h":         None,
     "song_name":       "",     # se extrae de la partitura si está vacío
     "show_header":     True,
     # Conteo previo: cantidad de pulsos (al tempo del primer compás) que se
@@ -589,8 +594,14 @@ class ScoreEngine:
             # Página de un solo sistema: estimar el interlineado a partir de
             # la altura del sistema para no dividir por cero ni fallar.
             self.sys_spacing_px = max(1.0, (lay0["bottoms"][0] - lay0["tops"][0]) * sv0 * 3.0)
-        self.video_w  = cfg["video_w"]
-        self.video_h  = int(cfg["n_visible_lines"] * self.sys_spacing_px)
+        self.video_w = cfg["video_w"]
+        # Resolución del dispositivo: si el usuario fijó video_h, el video se
+        # genera exactamente a ese alto (la cantidad de líneas visibles surge
+        # sola de la escala); si no, alto automático según n_visible_lines.
+        if cfg.get("video_h"):
+            self.video_h = int(cfg["video_h"])
+        else:
+            self.video_h = int(cfg["n_visible_lines"] * self.sys_spacing_px)
         self.video_h += self.video_h % 2
         frac = min(1.0, max(0.0, float(cfg["playhead_frac"])))
         self.playhead_y = int(self.video_h * frac)
@@ -1021,15 +1032,29 @@ class ScoreEngine:
         # ataque (mapa nota→x): la línea cae donde está el golpe de verdad.
         pw = cfg["playhead_w"]
         if pw > 0:
-            sv   = self._svg_scale[fn]
-            x_svg = self._measure_x_at(fn, mi, m_prog, beats, mx0, mx1)
+            sv = self._svg_scale[fn]
+            if cfg.get("playhead_mode") == "beats":
+                # de a saltitos: la línea queda clavada en el tiempo actual
+                nbq = max(1, int(round(beats)))
+                bq  = min(nbq - 1, int(m_prog * nbq + 1e-6))
+                x_svg = self._measure_x_at(fn, mi, bq / nbq, beats, mx0, mx1)
+            else:
+                x_svg = self._measure_x_at(fn, mi, m_prog, beats, mx0, mx1)
             vl_x = max(0, min(self.video_w - 1, int(x_svg * sv)))
             eff_hdr = int(_HEADER_H * h_prog) + 4
             vl_top  = max(eff_hdr, ht)
             vl_bot  = min(self.video_h - 1, hb)
             pc = cfg["playhead_color"]
-            if vl_top < vl_bot:
-                frame[vl_top:vl_bot, max(0, vl_x - pw):vl_x + pw] = [pc[2], pc[1], pc[0]]
+            alpha = min(1.0, max(0.05, float(cfg.get("playhead_alpha", 1.0))))
+            x0c, x1c = max(0, vl_x - pw), min(self.video_w, vl_x + pw)
+            if vl_top < vl_bot and x0c < x1c:
+                if alpha >= 0.995:
+                    frame[vl_top:vl_bot, x0c:x1c] = [pc[2], pc[1], pc[0]]
+                else:
+                    region = frame[vl_top:vl_bot, x0c:x1c].astype(np.float32)
+                    col = np.array([pc[2], pc[1], pc[0]], dtype=np.float32)
+                    frame[vl_top:vl_bot, x0c:x1c] = (
+                        region * (1 - alpha) + col * alpha).astype(np.uint8)
 
         return frame
 
