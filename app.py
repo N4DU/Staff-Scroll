@@ -156,6 +156,17 @@ def create_app():
             mt = "audio/mpeg"  # nuestros .mpeg son MP3 de audio, no video
         return send_file(j["audio_path"], mimetype=mt, conditional=True)
 
+    @app.route("/wavepeaks/<job_id>")
+    def wavepeaks(job_id):
+        """Envolvente binaria de alta resolución de la canción (int8:
+        mín, máx, rms por ventana — ver audio_sync.waveform_envelope)."""
+        j = jobs.get(job_id)
+        if not j or not j.get("wave_env"):
+            return jsonify({"error": "Envolvente no disponible"}), 404
+        return Response(j["wave_env"], mimetype="application/octet-stream",
+                        headers={"X-Envelope-Rate": str(j.get("wave_env_rate", 400)),
+                                 "Cache-Control": "no-store"})
+
     @app.route("/editor_data/<job_id>")
     def editor_data(job_id):
         j = jobs.get(job_id)
@@ -290,6 +301,9 @@ def _run_job(job_id, options):
             from audio_sync import analyze_audio
             with progress.phase("Analizando la canción", span=(82, 98)) as ph:
                 analysis = analyze_audio(_find_ffmpeg(), j["audio_path"], phase=ph)
+            # la envolvente es binaria: se sirve por /wavepeaks, no en el JSON
+            j["wave_env"]      = analysis.pop("envelope", b"")
+            j["wave_env_rate"] = analysis.pop("envelope_rate", 0)
             j["editor_data"] = _build_editor_data(engine, analysis)
             j["render"] = {"pct": 0, "done": False, "error": None, "path": None}
             threading.Thread(target=_render_silent, args=(job_id,), daemon=True).start()
@@ -413,7 +427,8 @@ def _build_editor_data(engine, analysis):
         "pages":          list(engine.cfg["file_nums"]),
         "page_aspect":    round(pw0 / ph0, 5) if ph0 else 0.7071,
         "measures":       measures,
-        "audio":          analysis,
+        # sin claves binarias (la envolvente viaja aparte, por /wavepeaks)
+        "audio":          {k: v for k, v in analysis.items() if k != "envelope"},
     }
 
 

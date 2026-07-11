@@ -493,6 +493,19 @@ body {
   color: var(--text); font-size: 1rem; cursor: pointer; line-height: 1;
 }
 .ed-sheet-btn:hover { border-color: var(--orange); color: var(--orange); }
+.ed-sheet-btn.danger { background: rgba(160,40,40,0.75); border-color: #c85050; }
+.ed-pulse-tools {
+  position: absolute; display: none; gap: 4px; z-index: 30;
+  background: #1c2230; border: 1px solid #3a4358; border-radius: 8px;
+  padding: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+}
+.ed-pulse-tools button {
+  background: #2a3244; color: #e8ecf4; border: none; border-radius: 5px;
+  padding: 3px 9px; cursor: pointer; font-size: 12.5px; white-space: nowrap;
+}
+.ed-pulse-tools button:hover { background: #39435c; }
+.ed-pulse-tools #edPulseSave { background: #2f7d4f; font-weight: 600; }
+.ed-pulse-tools #edPulseSave:hover { background: #38975f; }
 .sync-editor:fullscreen { padding: 12px 18px 14px; }
 /* modo "partitura al máximo": oculta barra superior y controles/tiras, la
    hoja usa TODA la pantalla (escalada por altura) */
@@ -779,10 +792,17 @@ body {
       <canvas id="edSheet"></canvas>
       <div class="ed-page-label" id="edPageLabel"></div>
       <div class="ed-sheet-tools">
+        <button class="ed-sheet-btn" id="edUnlock" style="display:none" title="Desbloquear TODOS los pulsos para moverlos (&uacute;ltimo recurso)">🔓</button>
         <button class="ed-sheet-btn" id="edZoomScoreOut" title="Alejar la partitura">&minus;</button>
         <button class="ed-sheet-btn" id="edZoomScoreIn" title="Acercar la partitura">+</button>
         <button class="ed-sheet-btn" id="edZoomScoreReset" title="Ajustar a la pantalla">⤢</button>
         <button class="ed-sheet-btn" id="edFull" title="Pantalla completa">⛶</button>
+      </div>
+      <!-- mini barra flotante para corregir UN pulso seleccionado en modo D -->
+      <div class="ed-pulse-tools" id="edPulseTools">
+        <button id="edPulseEdit" title="Corregir este pulso">&#9998; Corregir</button>
+        <button id="edPulseSave" title="Guardar la correcci&oacute;n">&#10003; Guardar</button>
+        <button id="edPulseCancel" title="Deshacer y dejarlo como estaba">&#8630;</button>
       </div>
     </div>
     <button class="ed-page-nav" id="edNextPage" type="button">&#8250;</button>
@@ -811,7 +831,7 @@ body {
       Arrastr&aacute; la tira de la <b style="color:var(--orange)">partitura</b> (arriba) o de la <b style="color:#5ac8ff">canci&oacute;n</b> (abajo) para alinearlas &middot;
       arrastr&aacute; la <b>l&iacute;nea blanca</b> para moverla (se imanta a los tiempos) &middot; click = mover el cursor &middot; rueda = zoom &middot;
       <kbd>Espacio</kbd> reproducir/pausar desde la l&iacute;nea blanca &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10ms (<kbd>Shift</kbd> = 1ms) &middot;
-      <kbd>P</kbd> ver los pulsos en la hoja (arrastralos si alguno qued&oacute; mal) &middot; <kbd>D</kbd> diagn&oacute;stico
+      <kbd>D</kbd> diagn&oacute;stico: ver compases y pulsos (toc&aacute; un pulso y us&aacute; ✏ Corregir para moverlo)
     </div>
   </div>
 
@@ -1306,6 +1326,11 @@ const ed = {
   play:     document.getElementById("edPlay"),
   toStart:  document.getElementById("edToStart"),
   testEnd:  document.getElementById("edTestEnd"),
+  unlock:   document.getElementById("edUnlock"),
+  pulseTools:  document.getElementById("edPulseTools"),
+  pulseEdit:   document.getElementById("edPulseEdit"),
+  pulseSave:   document.getElementById("edPulseSave"),
+  pulseCancel: document.getElementById("edPulseCancel"),
   time:     document.getElementById("edTime"),
   mInd:     document.getElementById("edMeasureInd"),
   align:    document.getElementById("edAlignInfo"),
@@ -1334,9 +1359,15 @@ let edRAF = null;
 let edCurPage = 1;
 let edFollow = true;
 let edDiag = false;
-let edPulses = false;             // [P] mostrar los pulsos guardados en la hoja
+// corrección de pulsos (dentro del modo [D]): flujo seguro —
+// tocar un pulso lo SELECCIONA (solo mirar) → ✏ Corregir lo habilita en rojo
+// (solo ese) → ✓ Guardar lo fija (violeta). 🔓 desbloquea TODOS (último recurso).
 let edPulseFixes = {};            // "índiceCompás|pulso" → x corregida (fracción)
 let edPulseDrag = null;           // arrastre de un pulso en curso
+let edSel = null;                 // pulso seleccionado {mi, k}
+let edEditSel = false;            // ¿el seleccionado está en edición (rojo)?
+let edEditOrig = null;            // x original para poder deshacer
+let edUnlocked = false;           // 🔓 todos los pulsos móviles a la vez
 
 // zoom/pan de la HOJA (independiente del zoom de las tiras)
 let edSheetZoom = 1, edSheetPanX = 0, edSheetPanY = 0;
@@ -1353,6 +1384,38 @@ let edPageBitmaps = {};           // banda de música pre-escalada (por página)
 let edFitKey = "";                // tamaño/dpr con que se pre-escalaron las hojas
 let edTracksBg = document.createElement("canvas");
 let edTracksKey = "";
+
+// envolvente de alta resolución de la canción (binaria, ver /wavepeaks):
+// niveles piramidales para dibujar por píxel a cualquier zoom sin recorrer
+// cientos de miles de ventanas
+let edWave = null;   // {rate, levels: [{mins,maxs,rms}, …]} — nivel k: rate/2^k
+function loadWaveEnvelope(jobId) {
+  edWave = null;
+  fetch(`/wavepeaks/${jobId}`).then(r => {
+    if (!r.ok) throw new Error("sin envolvente");
+    const rate = parseFloat(r.headers.get("X-Envelope-Rate")) || 400;
+    return r.arrayBuffer().then(buf => ({ rate, buf }));
+  }).then(({ rate, buf }) => {
+    const raw = new Int8Array(buf);
+    const n = Math.floor(raw.length / 3);
+    let mins = new Int8Array(n), maxs = new Int8Array(n), rms = new Int8Array(n);
+    for (let i = 0; i < n; i++) { mins[i] = raw[i*3]; maxs[i] = raw[i*3+1]; rms[i] = raw[i*3+2]; }
+    const levels = [{ mins, maxs, rms }];
+    while (levels[levels.length - 1].mins.length > 2048) {
+      const p = levels[levels.length - 1], m = p.mins.length >> 1;
+      const L = { mins: new Int8Array(m), maxs: new Int8Array(m), rms: new Int8Array(m) };
+      for (let i = 0; i < m; i++) {
+        L.mins[i] = Math.min(p.mins[2*i], p.mins[2*i+1]);
+        L.maxs[i] = Math.max(p.maxs[2*i], p.maxs[2*i+1]);
+        L.rms[i]  = Math.max(p.rms[2*i],  p.rms[2*i+1]);
+      }
+      levels.push(L);
+    }
+    edWave = { rate, levels };
+    edTracksKey = "";
+    if (edData) drawTracks();
+  }).catch(() => {});   // sin envolvente → se usa la forma de onda del JSON
+}
 
 const offset  = () => edS - edA;
 const beatDur = () => 60 / (edData ? edData.score_bpm : 120);
@@ -1395,10 +1458,14 @@ function openEditor(jobId) {
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
     edS = 0; edA = 0; edCursor = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
-    edPulses = false; edPulseFixes = {}; edPulseDrag = null;
+    edPulseFixes = {}; edPulseDrag = null;
+    edSel = null; edEditSel = false; edEditOrig = null; edUnlocked = false;
+    ed.unlock.style.display = "none"; ed.unlock.innerHTML = "🔓";
+    ed.unlock.classList.remove("danger");
     edPrePlay = null; ed.play.innerHTML = "&#9654; Reproducir";
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
+    loadWaveEnvelope(jobId);
     buildBeatGrid();
     edPageImgs = {}; edPageBitmaps = {}; edFitKey = "";
     d.pages.forEach(p => {
@@ -1592,34 +1659,32 @@ function drawSheet() {
       ctx.fillStyle = "rgba(60,120,255,0.9)";
       ctx.fillText(String(i + 1), px(mm.x0) + 2, py(mm.y0));
       if (mm.hx) {
-        ctx.fillStyle = "rgba(0,170,60,0.85)";
-        for (const [b, xf] of mm.hx) { ctx.beginPath(); ctx.arc(px(xf), py((mm.y0 + mm.y1) / 2), 4, 0, 7); ctx.fill(); }
+        // pulsos guardados: verde = original, violeta = corregido y guardado,
+        // rojo = en edición (o todo desbloqueado). Tocar uno lo selecciona.
+        for (let k = 0; k < mm.hx.length; k++) {
+          const xf = mm.hx[k][1];
+          const key = i + "|" + k;
+          const isSel = edSel && edSel.mi === i && edSel.k === k;
+          const editable = edUnlocked || (isSel && edEditSel);
+          let col = (key in edPulseFixes) ? "200,80,255" : "0,170,90";
+          if (editable) col = "235,70,60";
+          ctx.strokeStyle = `rgba(${col},${editable ? 0.95 : 0.55})`;
+          ctx.lineWidth = editable ? 2 : 1.4;
+          ctx.beginPath(); ctx.moveTo(px(xf), py(mm.y0)); ctx.lineTo(px(xf), py(mm.y1)); ctx.stroke();
+          ctx.fillStyle = `rgba(${col},0.92)`;
+          ctx.beginPath(); ctx.arc(px(xf), py(mm.y0), (isSel || editable) ? 6 : 4.5, 0, 7); ctx.fill();
+          if (isSel) {
+            ctx.strokeStyle = "rgba(255,255,255,0.95)"; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(px(xf), py(mm.y0), 9, 0, 7); ctx.stroke();
+          }
+        }
       } else {
         ctx.strokeStyle = "rgba(230,40,40,0.8)";
         ctx.strokeRect(px(mm.x0), py(mm.y0), px(mm.x1) - px(mm.x0), py(mm.y1) - py(mm.y0));
       }
     });
   }
-
-  if (edPulses) {
-    // [P] pulsos guardados: dónde caerá la línea amarilla en cada tiempo.
-    // Cada marcador se puede arrastrar horizontalmente para corregirlo; los
-    // corregidos se pintan violeta y viajan al video final al generar.
-    edData.measures.forEach((mm, i) => {
-      if (mm.page !== edCurPage || !mm.hx) return;
-      for (let k = 0; k < mm.hx.length; k++) {
-        const xf = mm.hx[k][1];
-        const fixed = (i + "|" + k) in edPulseFixes;
-        const grabbed = edPulseDrag && edPulseDrag.mi === i && edPulseDrag.k === k;
-        const col = fixed ? "200,80,255" : "0,170,90";
-        ctx.strokeStyle = `rgba(${col},${grabbed ? 0.95 : 0.55})`;
-        ctx.lineWidth = grabbed ? 2 : 1.4;
-        ctx.beginPath(); ctx.moveTo(px(xf), py(mm.y0)); ctx.lineTo(px(xf), py(mm.y1)); ctx.stroke();
-        ctx.fillStyle = `rgba(${col},${grabbed ? 1 : 0.85})`;
-        ctx.beginPath(); ctx.arc(px(xf), py(mm.y0), grabbed ? 6 : 4.5, 0, 7); ctx.fill();
-      }
-    });
-  }
+  positionPulseTools();
 
   const tau = curMusic();
   const m = measureAt(tau);
@@ -1718,16 +1783,70 @@ ed.zScoreIn.addEventListener("click", () => { const L = edSheetLayout; zoomSheet
 ed.zScoreOut.addEventListener("click", () => { const L = edSheetLayout; zoomSheet(1 / 1.3, L ? L.cvW / 2 : null, L ? L.cvH / 2 : null); });
 ed.zScoreRst.addEventListener("click", () => { clearTimeout(edSharpTimer); edSheetZoom = 1; edSheetPanX = edSheetPanY = 0; edSheetSharp = false; ed.sheet.classList.remove("zoomed"); edSheetKey = ""; drawSheet(); });
 
-// ── corrección de pulsos [P]: buscar un marcador cerca del mouse ─────────────
+// ── corrección de pulsos (modo [D]) ──────────────────────────────────────────
+function positionPulseTools() {
+  // mini barra flotante junto al pulso seleccionado (✏ / ✓ / ↩)
+  const tools = ed.pulseTools;
+  if (!edDiag || !edSel || edUnlocked || !edSheetLayout) {
+    tools.style.display = "none"; return;
+  }
+  const m = edData.measures[edSel.mi];
+  if (!m || m.page !== edCurPage || !m.hx || !m.hx[edSel.k]) {
+    tools.style.display = "none"; return;
+  }
+  const L = edSheetLayout;
+  const x = ed.sheet.offsetLeft + L.ox + m.hx[edSel.k][1] * L.pw;
+  const y = ed.sheet.offsetTop + L.oy +
+            ((m.y0 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph;
+  tools.style.display = "flex";
+  ed.pulseEdit.style.display = edEditSel ? "none" : "";
+  ed.pulseSave.style.display = ed.pulseCancel.style.display = edEditSel ? "" : "none";
+  const tw = tools.offsetWidth, th = tools.offsetHeight;
+  const maxX = ed.sheetWrap.clientWidth - tw - 2;
+  tools.style.left = Math.max(2, Math.min(maxX, x - tw / 2)) + "px";
+  tools.style.top = Math.max(2, y - th - 14) + "px";
+}
+function startPulseEdit() {
+  if (!edSel) return;
+  edEditSel = true;
+  edEditOrig = edData.measures[edSel.mi].hx[edSel.k][1];
+  drawSheet();
+}
+function savePulseEdit() {
+  if (!edEditSel || !edSel) return;
+  edPulseFixes[edSel.mi + "|" + edSel.k] = edData.measures[edSel.mi].hx[edSel.k][1];
+  edEditSel = false; edEditOrig = null;
+  drawSheet();
+}
+function cancelPulseEdit() {
+  if (!edEditSel || !edSel) return;
+  if (edEditOrig !== null) edData.measures[edSel.mi].hx[edSel.k][1] = edEditOrig;
+  edEditSel = false; edEditOrig = null;
+  drawSheet();
+}
+ed.pulseEdit.addEventListener("click", startPulseEdit);
+ed.pulseSave.addEventListener("click", savePulseEdit);
+ed.pulseCancel.addEventListener("click", cancelPulseEdit);
+ed.unlock.addEventListener("click", () => {
+  edUnlocked = !edUnlocked;
+  if (edUnlocked) { if (edEditSel) cancelPulseEdit(); edSel = null; }
+  ed.unlock.innerHTML = edUnlocked ? "🔒" : "🔓";
+  ed.unlock.title = edUnlocked
+    ? "Bloquear los pulsos de nuevo (recomendado)"
+    : "Desbloquear TODOS los pulsos para moverlos (último recurso)";
+  ed.unlock.classList.toggle("danger", edUnlocked);
+  drawSheet();
+});
+
 function pulseHitAt(x, y) {
   const L = edSheetLayout;
-  if (!edPulses || !L) return null;
+  if (!edDiag || !L) return null;
   let best = null, bestD = 8;                     // tolerancia: 8 px
   edData.measures.forEach((mm, i) => {
     if (mm.page !== edCurPage || !mm.hx) return;
     const yTop = L.oy + ((mm.y0 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph;
     const yBot = L.oy + ((mm.y1 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph;
-    if (y < yTop - 10 || y > yBot) return;
+    if (y < yTop - 12 || y > yBot) return;
     for (let k = 0; k < mm.hx.length; k++) {
       const d = Math.abs(x - (L.ox + mm.hx[k][1] * L.pw));
       if (d < bestD) { bestD = d; best = { mi: i, k, m: mm }; }
@@ -1736,18 +1855,34 @@ function pulseHitAt(x, y) {
   return best;
 }
 
-// pan de la hoja arrastrando (con zoom) — o arrastre de un pulso (modo [P])
+// pan de la hoja (con zoom) — o selección/arrastre de pulsos en modo [D]
 ed.sheet.addEventListener("mousedown", e => {
   const rect = ed.sheet.getBoundingClientRect();
   const hit = pulseHitAt(e.clientX - rect.left, e.clientY - rect.top);
-  if (hit) {
+  const canDrag = hit && (edUnlocked ||
+    (edEditSel && edSel && edSel.mi === hit.mi && edSel.k === hit.k));
+  if (canDrag) {
     const hx = hit.m.hx;
     // el pulso solo puede moverse dentro de su compás y sin cruzar vecinos
     const lo = hit.k > 0 ? hx[hit.k - 1][1] + 0.001 : hit.m.x0;
     const hi = hit.k < hx.length - 1 ? hx[hit.k + 1][1] - 0.001 : hit.m.x1;
-    edPulseDrag = { ...hit, lo, hi };
+    edPulseDrag = { ...hit, lo, hi, record: edUnlocked };
     e.preventDefault();
     return;
+  }
+  if (hit) {
+    // tocar un pulso lo selecciona (solo mirar); si había otro a medio
+    // editar, se deshace primero — nada se mueve sin pasar por ✏ + ✓
+    if (edEditSel) cancelPulseEdit();
+    edSel = { mi: hit.mi, k: hit.k };
+    drawSheet();
+    e.preventDefault();
+    return;
+  }
+  if (edDiag && (edSel || edEditSel)) {
+    if (edEditSel) cancelPulseEdit();   // click afuera = deshacer y soltar
+    edSel = null;
+    drawSheet();
   }
   if (edSheetZoom <= 1.001) return;
   edSheetDrag = { x: e.clientX, y: e.clientY, px: edSheetPanX, py: edSheetPanY };
@@ -1755,12 +1890,15 @@ ed.sheet.addEventListener("mousedown", e => {
   e.preventDefault();
 });
 ed.sheet.addEventListener("mousemove", e => {
-  // cursor de "agarrable" al pasar sobre un pulso en modo [P]
-  if (edPulses && !edPulseDrag && !edSheetDrag) {
+  // cursor según lo que haya debajo: ↔ si se puede arrastrar, mano si se
+  // puede seleccionar
+  if (edDiag && !edPulseDrag && !edSheetDrag) {
     const rect = ed.sheet.getBoundingClientRect();
-    ed.sheet.style.cursor =
-      pulseHitAt(e.clientX - rect.left, e.clientY - rect.top) ? "ew-resize" : "";
-  } else if (!edPulses) {
+    const hit = pulseHitAt(e.clientX - rect.left, e.clientY - rect.top);
+    const draggable = hit && (edUnlocked ||
+      (edEditSel && edSel && edSel.mi === hit.mi && edSel.k === hit.k));
+    ed.sheet.style.cursor = draggable ? "ew-resize" : (hit ? "pointer" : "");
+  } else if (!edDiag) {
     ed.sheet.style.cursor = "";
   }
 });
@@ -1771,7 +1909,9 @@ window.addEventListener("mousemove", e => {
     const xf = Math.min(edPulseDrag.hi, Math.max(edPulseDrag.lo,
       (e.clientX - rect.left - L.ox) / Math.max(1e-6, L.pw)));
     edPulseDrag.m.hx[edPulseDrag.k][1] = Math.round(xf * 1e4) / 1e4;
-    edPulseFixes[edPulseDrag.mi + "|" + edPulseDrag.k] = edPulseDrag.m.hx[edPulseDrag.k][1];
+    if (edPulseDrag.record) {   // 🔓: se registra al soltar cada movimiento
+      edPulseFixes[edPulseDrag.mi + "|" + edPulseDrag.k] = edPulseDrag.m.hx[edPulseDrag.k][1];
+    }
     drawSheet();
     return;
   }
@@ -1879,10 +2019,63 @@ function rebuildTracksIfNeeded() {
   ctx.fillStyle = "rgba(90,200,255,0.05)";
   ctx.fillRect(xOfSig(edA), ay, edData.audio.duration * edZoom, ah);
   const dur = edData.audio.duration;
-  const mins = edData.audio.waveform.mins, maxs = edData.audio.waveform.maxs;
-  if (mins.length) {
+  const midY = ay + ah * 0.55, amp = ah * 0.42;
+  if (edWave) {
+    // ── envolvente de ALTA resolución: picos (claro) + cuerpo rms (azul) ──
+    // Se elige el nivel de la pirámide cuyo tamaño de ventana quede en 1-2
+    // por píxel; con más zoom que la base (2.5 ms) se interpola linealmente.
+    const secPerPx = 1 / edZoom;
+    let lv = 0;
+    while (lv < edWave.levels.length - 1 &&
+           secPerPx * edWave.rate / (1 << lv) > 2) lv++;
+    const L = edWave.levels[lv];
+    const bDur = (1 << lv) / edWave.rate;
+    const nB = L.mins.length;
+    const colPk = [], colRm = [];
+    for (let px2 = 0; px2 < W; px2++) {
+      const u0 = sigOfX(px2) - edA, u1 = sigOfX(px2 + 1) - edA;
+      if (u1 < 0 || u0 > dur) { colPk.push(null); colRm.push(null); continue; }
+      const f0 = u0 / bDur, f1 = u1 / bDur;
+      const b0 = Math.max(0, Math.floor(f0));
+      const b1 = Math.min(nB - 1, Math.floor(f1));
+      let lo, hi, rm;
+      if (b1 <= b0 + 1 && f1 - f0 < 1) {
+        // sub-ventana: interpolar entre ventanas vecinas (zoom extremo)
+        const t = f0 - Math.floor(f0), a = Math.min(nB - 1, Math.max(0, b0));
+        const b = Math.min(nB - 1, a + 1);
+        lo = L.mins[a] + (L.mins[b] - L.mins[a]) * t;
+        hi = L.maxs[a] + (L.maxs[b] - L.maxs[a]) * t;
+        rm = L.rms[a]  + (L.rms[b]  - L.rms[a])  * t;
+      } else {
+        lo = 127; hi = -127; rm = 0;
+        for (let b = b0; b <= b1; b++) {
+          if (L.mins[b] < lo) lo = L.mins[b];
+          if (L.maxs[b] > hi) hi = L.maxs[b];
+          if (L.rms[b]  > rm) rm = L.rms[b];
+        }
+        if (hi < lo) { colPk.push(null); colRm.push(null); continue; }
+      }
+      colPk.push([midY - (hi / 127) * amp, midY - (lo / 127) * amp]);
+      colRm.push([midY - (rm / 127) * amp, midY + (rm / 127) * amp]);
+    }
+    ctx.strokeStyle = "rgba(150,175,195,0.85)"; ctx.lineWidth = 1;   // picos
+    ctx.beginPath();
+    for (let px2 = 0; px2 < W; px2++) {
+      const c = colPk[px2]; if (!c) continue;
+      ctx.moveTo(px2 + 0.5, c[0]); ctx.lineTo(px2 + 0.5, c[1] + 0.75);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(122,208,255,0.95)";                      // cuerpo
+    ctx.beginPath();
+    for (let px2 = 0; px2 < W; px2++) {
+      const c = colRm[px2]; if (!c) continue;
+      ctx.moveTo(px2 + 0.5, c[0]); ctx.lineTo(px2 + 0.5, c[1] + 0.5);
+    }
+    ctx.stroke();
+  } else if (edData.audio.waveform.mins.length) {
+    // ── reserva: forma de onda del JSON (baja resolución) ──
+    const mins = edData.audio.waveform.mins, maxs = edData.audio.waveform.maxs;
     const bucketDur = dur / mins.length;
-    const midY = ay + ah * 0.55, amp = ah * 0.42;
     ctx.strokeStyle = "#a8a8a8"; ctx.lineWidth = 1;
     ctx.beginPath();
     for (let px2 = 0; px2 < W; px2++) {
@@ -2112,6 +2305,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (!ed.el.classList.contains("visible") || !edData) return;
+  if (e.key === "Escape" && edEditSel) { cancelPulseEdit(); return; }
   if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
@@ -2120,11 +2314,16 @@ document.addEventListener("keydown", e => {
     edTracksKey = "";
     updateAll();
   }
-  else if (e.key === "d" || e.key === "D") { edDiag = !edDiag; edSheetKey = ""; drawSheet(); }
-  else if (e.key === "p" || e.key === "P") {
-    edPulses = !edPulses;
-    if (!edPulses) { edPulseDrag = null; ed.sheet.style.cursor = ""; }
-    drawSheet();
+  else if (e.key === "d" || e.key === "D") {
+    edDiag = !edDiag;
+    ed.unlock.style.display = edDiag ? "" : "none";
+    if (!edDiag) {
+      if (edEditSel) cancelPulseEdit();
+      edSel = null; edPulseDrag = null; edUnlocked = false;
+      ed.unlock.innerHTML = "🔓"; ed.unlock.classList.remove("danger");
+      ed.sheet.style.cursor = "";
+    }
+    edSheetKey = ""; drawSheet();
   }
   else if (e.key === "f" || e.key === "F") { ed.full.click(); }
   else if (e.key === "Escape" && ed.el.classList.contains("sheet-max")) {
