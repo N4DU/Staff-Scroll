@@ -31,15 +31,22 @@ def create_app():
         if not files or all(f.filename == "" for f in files):
             return jsonify({"error": "No se recibieron archivos"}), 400
 
+        _sweep_stale_workdirs()
+
         job_id = uuid.uuid4().hex[:10]
         job_dir = os.path.join(tempfile.gettempdir(), f"scrolling_score_{job_id}")
         mscz_dir = os.path.join(job_dir, "uploads")
         os.makedirs(mscz_dir, exist_ok=True)
 
+        def _reject(msg):
+            # si la validación falla a mitad de lote, no dejar basura en disco
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return jsonify({"error": msg}), 400
+
         saved_paths = []
         for idx, f in enumerate(files):
             if not f.filename.lower().endswith(".mscz"):
-                return jsonify({"error": f"Archivo no válido: {f.filename}"}), 400
+                return _reject(f"Archivo no válido: {f.filename}")
             # secure_filename evita path traversal; el prefijo numérico evita
             # colisiones entre archivos con el mismo nombre y fija el orden.
             safe = secure_filename(f.filename) or f"page{idx + 1}.mscz"
@@ -53,7 +60,7 @@ def create_app():
         if audio and audio.filename:
             ext = os.path.splitext(audio.filename)[1].lower()
             if ext not in AUDIO_EXTS:
-                return jsonify({"error": f"Formato de audio no soportado: {ext}"}), 400
+                return _reject(f"Formato de audio no soportado: {ext}")
             audio_path = os.path.join(job_dir, f"song{ext}")
             audio.save(audio_path)
 
@@ -71,7 +78,7 @@ def create_app():
 
     @app.route("/generate", methods=["POST"])
     def generate():
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         job_id = data.get("job_id")
         options = data.get("options", {})
 
@@ -123,13 +130,21 @@ def create_app():
 
         def _cleanup():
             # Margen amplio para que send_file termine de transmitir el video
-            # antes de borrar el directorio de trabajo.
+            # antes de borrar el directorio de trabajo. Si el usuario pidió
+            # OTRO finalize (ajustó la sincronización tras descargar), no se
+            # borra nada: el barrido de /upload limpiará el directorio después.
             import time as _t
             _t.sleep(120)
+            if j.get("finalizing") or not j.get("done"):
+                j["_cleanup"] = False
+                return
             shutil.rmtree(j["workdir"], ignore_errors=True)
             jobs.pop(job_id, None)
 
-        threading.Thread(target=_cleanup, daemon=True).start()
+        with _jobs_lock:
+            if not j.get("_cleanup"):        # un solo hilo de limpieza por job
+                j["_cleanup"] = True
+                threading.Thread(target=_cleanup, daemon=True).start()
         return send_file(out, as_attachment=True, download_name="scrolling_score.mp4", mimetype="video/mp4")
 
     # ── rutas del editor de sincronización ───────────────────────────────────
@@ -177,15 +192,18 @@ def create_app():
     @app.route("/finalize/<job_id>", methods=["POST"])
     def finalize(job_id):
         j = jobs.get(job_id)
-        if not j or not j.get("done") or j.get("error") or not j.get("render"):
+        # "render" existe solo si el trabajo inicial llegó al editor: eso es lo
+        # que habilita finalizar. Un error de un finalize ANTERIOR no bloquea
+        # el reintento (j["error"] se limpia al arrancar de nuevo).
+        if not j or not j.get("render"):
             return jsonify({"error": "Job no está listo"}), 409
-        data = request.get_json(force=True)
+        data = request.get_json(silent=True) or {}
         skip = bool(data.get("skip"))
         try:
             # offset negativo = la partitura empieza ANTES que el audio
             offset  = max(-7200.0, min(7200.0, float(data.get("offset", 0.0))))
             stretch = max(0.5, min(2.0, float(data.get("stretch", 1.0))))
-            # correcciones de pulsos hechas en el editor con [P]:
+            # correcciones de pulsos hechas en el editor (modo D):
             # {i: índice de compás en la línea de tiempo, k: pulso, x: fracción}
             fixes = []
             for f in (data.get("pulse_fixes") or [])[:4000]:
@@ -193,12 +211,14 @@ def create_app():
                               "x": min(1.0, max(0.0, float(f["x"])))})
         except (TypeError, ValueError, KeyError):
             return jsonify({"error": "Parámetros inválidos"}), 400
-        j["pulse_fixes"] = fixes
 
         with _jobs_lock:
             if j.get("finalizing"):
                 return jsonify({"error": "Ya se está generando el video final"}), 409
             j["finalizing"] = True
+            # dentro del lock: que un doble-submit no pise las correcciones
+            # del finalize que ya arrancó
+            j["pulse_fixes"] = fixes
         j["done"] = False
         j["error"] = None
         j["editor"] = False
@@ -210,6 +230,30 @@ def create_app():
         return jsonify({"status": "iniciado"})
 
     return app
+
+
+def _sweep_stale_workdirs(max_age_h=24):
+    """Borra directorios scrolling_score_* huérfanos (de sesiones anteriores
+    que nunca descargaron). Sin esto, cada trabajo abandonado deja su carpeta
+    en %TEMP% para siempre."""
+    import time as _t
+    base = tempfile.gettempdir()
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return
+    now = _t.time()
+    for n in names:
+        if not n.startswith("scrolling_score_"):
+            continue
+        if n[len("scrolling_score_"):] in jobs:
+            continue                     # trabajo vivo de esta sesión
+        p = os.path.join(base, n)
+        try:
+            if now - os.path.getmtime(p) > max_age_h * 3600:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
 
 
 # ─── job runner ──────────────────────────────────────────────────────────────
@@ -238,6 +282,10 @@ def _run_job(job_id, options):
                       f"{n_scores} partitura{'s' if n_scores != 1 else ''}{audio_note}")
 
     try:
+        # Validar las opciones ANTES del pipeline: un valor mal formado debe
+        # fallar en milisegundos, no después de minutos de render de MuseScore.
+        user_cfg = _sanitize_options(options)
+
         prog(2, "Iniciando pipeline…")
         workdir    = j["workdir"]
         mscz_paths = j["mscz_paths"]
@@ -249,42 +297,7 @@ def _run_job(job_id, options):
             workdir=render_dir,
             progress=progress,
         )
-
-        # Merge user options into engine config
-        if options.get("show_header") is False:
-            engine_cfg["show_header"] = False
-        if "page_gap_pct" in options:
-            engine_cfg["page_gap_pct"] = min(100.0, max(0.0, float(options["page_gap_pct"])))
-        if "playhead_frac" in options:
-            engine_cfg["playhead_frac"] = min(1.0, max(0.0, float(options["playhead_frac"])))
-        if "count_in_beats" in options:
-            engine_cfg["count_in_beats"] = max(0, min(16, int(options["count_in_beats"])))
-        if options.get("song_name"):
-            engine_cfg["song_name"] = str(options["song_name"])
-
-        # Línea de tiempo (playhead): estilo configurable
-        if options.get("playhead_mode") in ("fluid", "beats"):
-            engine_cfg["playhead_mode"] = options["playhead_mode"]
-        col = options.get("playhead_color")
-        if isinstance(col, str) and re.fullmatch(r"#?[0-9a-fA-F]{6}", col):
-            c = col.lstrip("#")
-            engine_cfg["playhead_color"] = tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
-        if "playhead_alpha" in options:
-            engine_cfg["playhead_alpha"] = min(1.0, max(0.05, float(options["playhead_alpha"])))
-        if "playhead_w" in options:
-            engine_cfg["playhead_w"] = max(1, min(8, int(options["playhead_w"])))
-        if options.get("show_playhead") is False:
-            engine_cfg["playhead_w"] = 0
-
-        # Resolución del dispositivo destino (par: se exige para yuv420p)
-        if options.get("video_w") and options.get("video_h"):
-            try:
-                w = max(320, min(3840, int(options["video_w"])))
-                h = max(240, min(2160, int(options["video_h"])))
-                engine_cfg["video_w"] = w - (w % 2)
-                engine_cfg["video_h"] = h - (h % 2)
-            except (TypeError, ValueError):
-                pass
+        engine_cfg.update(user_cfg)
 
         with progress.phase("Construyendo motor de video", span=(72, 82)) as ph:
             engine = build_engine(engine_cfg, phase=ph)
@@ -331,10 +344,59 @@ def _run_job(job_id, options):
         j["msg"]   = f"Error: {exc}"
         j["error"] = str(exc)
         j["done"]  = True
+        j["started"] = False   # habilita reintentar /generate sin re-subir
 
 
-def _render_video_frames(j, engine, report):
-    """Renderiza el video mudo (frames → ffmpeg). report(pct 0-100)."""
+def _sanitize_options(options):
+    """Valida y normaliza las opciones del usuario → claves del motor.
+    Lanza ValueError con mensaje claro si algo viene roto (se llama ANTES del
+    pipeline pesado para fallar rápido)."""
+    cfg = {}
+    try:
+        if options.get("show_header") is False:
+            cfg["show_header"] = False
+        if "page_gap_pct" in options:
+            cfg["page_gap_pct"] = min(100.0, max(0.0, float(options["page_gap_pct"])))
+        if "playhead_frac" in options:
+            cfg["playhead_frac"] = min(1.0, max(0.0, float(options["playhead_frac"])))
+        if "count_in_beats" in options:
+            cfg["count_in_beats"] = max(0, min(16, int(options["count_in_beats"])))
+        if options.get("song_name"):
+            cfg["song_name"] = str(options["song_name"])
+
+        # Línea de tiempo (playhead): estilo configurable
+        if options.get("playhead_mode") in ("fluid", "beats"):
+            cfg["playhead_mode"] = options["playhead_mode"]
+        col = options.get("playhead_color")
+        if isinstance(col, str) and re.fullmatch(r"#?[0-9a-fA-F]{6}", col):
+            c = col.lstrip("#")
+            cfg["playhead_color"] = tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+        if "playhead_alpha" in options:
+            cfg["playhead_alpha"] = min(1.0, max(0.05, float(options["playhead_alpha"])))
+        if "playhead_w" in options:
+            cfg["playhead_w"] = max(1, min(8, int(options["playhead_w"])))
+        if options.get("show_playhead") is False:
+            cfg["playhead_w"] = 0
+
+        # Resolución del dispositivo destino (par: se exige para yuv420p)
+        if options.get("video_w") and options.get("video_h"):
+            w = max(320, min(3840, int(options["video_w"])))
+            h = max(240, min(2160, int(options["video_h"])))
+            cfg["video_w"] = w - (w % 2)
+            cfg["video_h"] = h - (h % 2)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Opción inválida en la configuración: {exc}") from exc
+    return cfg
+
+
+class _RenderAborted(Exception):
+    """El render se canceló a propósito (lo reemplaza otro con correcciones)."""
+
+
+def _render_video_frames(j, engine, report, should_abort=None):
+    """Renderiza el video mudo (frames → ffmpeg). report(pct 0-100).
+    `should_abort()` (opcional) se consulta periódicamente: si devuelve True,
+    se corta ffmpeg, se borra el archivo parcial y se lanza _RenderAborted."""
     fps      = j["fps"]
     n_frames = max(1, int(engine.total_duration * fps))
     W, H     = engine.video_w, engine.video_h
@@ -345,7 +407,9 @@ def _render_video_frames(j, engine, report):
         "-f", "rawvideo", "-vcodec", "rawvideo",
         "-s", f"{W}x{H}", "-pix_fmt", "bgr24",
         "-r", str(fps), "-i", "pipe:0",
-        "-vcodec", "libx264", "-preset", "fast",
+        # veryfast: ~2x más rápido que "fast" con diferencia de calidad
+        # imperceptible a crf 18 (contenido de partitura: trazos nítidos)
+        "-vcodec", "libx264", "-preset", "veryfast",
         "-crf", "18", "-pix_fmt", "yuv420p",
         out_path,
     ]
@@ -356,6 +420,8 @@ def _render_video_frames(j, engine, report):
         pipe = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
         try:
             for i in range(n_frames):
+                if should_abort is not None and i % 30 == 0 and should_abort():
+                    raise _RenderAborted()
                 frame = engine.render_frame(i / fps)
                 pipe.stdin.write(frame.tobytes())
                 if i % max(1, n_frames // 100) == 0:
@@ -363,6 +429,27 @@ def _render_video_frames(j, engine, report):
             pipe.stdin.close()
         except BrokenPipeError:
             pass  # ffmpeg murió a mitad de camino; el returncode lo dirá
+        except _RenderAborted:
+            try:
+                pipe.stdin.close()
+            except OSError:
+                pass
+            pipe.terminate()
+            pipe.wait()
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            raise
+        except Exception:
+            # cualquier otro fallo (p. ej. en render_frame): NUNCA dejar un
+            # ffmpeg huérfano esperando stdin para siempre
+            try:
+                pipe.kill()
+            except OSError:
+                pass
+            pipe.wait()
+            raise
         pipe.wait()
 
     if pipe.returncode != 0:
@@ -385,7 +472,15 @@ def _render_silent(job_id):
             def _report(p):
                 r["pct"] = p
                 ph.update(p / 100)
-            r["path"] = _render_video_frames(j, j["engine"], _report)
+            try:
+                r["path"] = _render_video_frames(
+                    j, j["engine"], _report,
+                    should_abort=lambda: bool(r.get("cancel")))
+            except _RenderAborted:
+                # hay pulsos corregidos esperando: no tiene sentido terminar
+                # este render para tirarlo — el finalize hace UNO solo
+                r["aborted"] = True
+                ph.cancel("lo reemplaza el render con tus correcciones")
         r["pct"]  = 100
         r["done"] = True
     except Exception as exc:
@@ -406,6 +501,10 @@ def _build_editor_data(engine, analysis):
         measures.append({
             "t": round(t - lead, 4), "dur": round(dur, 4),
             "page": fn, "beats": beats, "bpm": bpm,
+            # id del compás FÍSICO: con repeticiones, el mismo compás aparece
+            # varias veces en la línea de tiempo pero comparte los pulsos —
+            # el editor espeja las correcciones entre esas apariciones
+            "pid": f"{fn}|{mi}",
             "x0": round(x0 / lay["w"], 4), "x1": round(x1 / lay["w"], 4),
             "y0": round(max(0.0, lay["tops"][si] - pad) / lay["h"], 4),
             "y1": round(min(lay["h"], lay["bottoms"][si] + pad) / lay["h"], 4),
@@ -450,30 +549,44 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
 
     try:
         r = j["render"]
+
+        # Pulsos corregidos a mano en el editor: se aplican al motor y el
+        # video se renderiza con la línea en las posiciones corregidas. Si el
+        # render en 2º plano AÚN está corriendo, se cancela (terminarlo para
+        # tirarlo sería duplicar minutos de trabajo) y se renderiza UNA vez.
+        # Un reintento con la misma tanda de correcciones no re-renderiza.
+        fixes = j.get("pulse_fixes") or []
+        sig = tuple(sorted((f["i"], f["k"], f["x"]) for f in fixes))
+        need_apply = bool(fixes) and sig != j.get("_fixes_applied")
+        if need_apply and not r["done"]:
+            r["cancel"] = True
+
         if not r["done"]:
             # La barra de consola del render la dibuja su propio hilo
             # (_render_silent); acá solo se refleja la espera en la web.
+            t_wait0 = time.time()
             while not r["done"]:
+                if time.time() - t_wait0 > 4 * 3600:
+                    raise RuntimeError("El render de fondo no respondió en 4 "
+                                       "horas — reiniciá el programa y reintentá.")
                 prog(5 + int(r["pct"] * 0.75),
                      f"Renderizando el video… ({r['pct']}%)")
                 time.sleep(0.3)
         if r["error"]:
             raise RuntimeError(r["error"])
 
-        # Pulsos corregidos a mano en el editor ([P]): se aplican al motor y
-        # el video se renderiza de nuevo con la línea en las posiciones
-        # corregidas. Si esta misma tanda ya se aplicó (reintento), se salta.
-        fixes = j.get("pulse_fixes") or []
-        sig = tuple(sorted((f["i"], f["k"], f["x"]) for f in fixes))
-        if fixes and sig != j.get("_fixes_applied"):
-            n_ok = _apply_pulse_fixes(j["engine"], fixes)
-            if n_ok:
-                what = "pulsos corregidos" if n_ok != 1 else "pulso corregido"
-                with progress.phase(f"Aplicando {n_ok} {what} (re-render)",
-                                    span=(10, 78)) as ph:
-                    r["path"] = _render_video_frames(
-                        j, j["engine"], lambda p: ph.update(p / 100))
+        n_ok = _apply_pulse_fixes(j["engine"], fixes) if need_apply else 0
+        if need_apply:
             j["_fixes_applied"] = sig
+        if n_ok or r.get("aborted") or not r.get("path"):
+            what = (f"Aplicando {n_ok} pulso{'s' if n_ok != 1 else ''} "
+                    f"corregido{'s' if n_ok != 1 else ''}" if n_ok
+                    else "Renderizando el video")
+            with progress.phase(what, span=(10, 78)) as ph:
+                r["path"] = _render_video_frames(
+                    j, j["engine"], lambda p: ph.update(p / 100))
+            r["cancel"] = False
+            r["aborted"] = False
 
         if skip_audio:
             j["output"] = r["path"]
