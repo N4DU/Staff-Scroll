@@ -135,8 +135,21 @@ def _parse_svg_layout(svg_path):
             systems.append(cur)
             cur = [y]
     systems.append(cur)
-    tops    = [min(s) for s in systems]
-    bottoms = [max(s) for s in systems]
+    # Pentagramas de UNA línea (percusión: cencerro, pandereta…): el grupo
+    # tiene una sola y → altura cero, lo que rompe todos los cálculos de
+    # bandas. Se les da una banda sintética de ±1.5 espacios de línea,
+    # recortada para no invadir a los sistemas vecinos.
+    raw = [(min(s), max(s)) for s in systems]
+    tops, bottoms = [], []
+    for i, (t, b) in enumerate(raw):
+        if b - t < 1e-6:
+            pad = 1.5 * min(40.0, median_diff)
+            lo = raw[i - 1][1] + 2 if i > 0 else 0.0
+            hi = raw[i + 1][0] - 2 if i + 1 < len(raw) else h
+            t2, b2 = max(lo, t - pad), min(hi, b + pad)
+            t, b = (t2, b2) if b2 - t2 > 1 else (t - 1, b + 1)
+        tops.append(t)
+        bottoms.append(b)
 
     # Extremos horizontales POR SISTEMA (un primer sistema con sangría no
     # debe heredar el ancho de los demás).
@@ -368,7 +381,12 @@ def _parse_score_xml(mscx_path):
         # cubra el compás completo (la principal); las demás pueden ser
         # parciales.
         onsets, covered = set(), 0.0
-        for v in m.findall('voice'):
+        voices = m.findall('voice')
+        if not voices and m.find('Chord') is not None:
+            # MuseScore 2 no envuelve el contenido en <voice>: los acordes
+            # cuelgan directo del compás — se trata el compás como una voz
+            voices = [m]
+        for v in voices:
             vo = _voice_onsets(v, beats)
             if vo is not None:
                 onsets.update(vo[0])
