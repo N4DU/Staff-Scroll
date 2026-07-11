@@ -281,6 +281,23 @@ body {
 .res-custom.visible { display: flex; }
 .res-custom .text-input { width: 110px; }
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.profile-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.profile-chip {
+  display: inline-flex; align-items: stretch; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 8px; background: #232a3a;
+}
+.profile-chip .profile-apply {
+  background: none; border: none; color: var(--text); cursor: pointer;
+  padding: 6px 10px; font-size: 0.86rem; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.profile-chip .profile-apply:hover { color: var(--orange); }
+.profile-chip .profile-del {
+  background: rgba(0,0,0,0.25); border: none; border-left: 1px solid var(--border);
+  color: #8a93a8; cursor: pointer; padding: 0 8px; font-size: 0.8rem;
+}
+.profile-chip .profile-del:hover { color: #ff7070; }
+.profile-chip .profile-del.armed { color: #ff7070; font-weight: 600; }
 @media (max-width: 640px) {
   .settings-win { grid-template-columns: 1fr; height: 92vh; }
   .settings-nav { flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
@@ -732,7 +749,7 @@ body {
           </div>
         </div>
 
-        <!-- ── Valores por defecto ── -->
+        <!-- ── Valores por defecto y perfiles ── -->
         <div class="set-pane" data-pane="defaults">
           <h3 class="set-h">Valores por defecto</h3>
           <div class="opt-row">
@@ -742,6 +759,17 @@ body {
               <button class="ed-btn" id="btnFactoryDefaults" type="button">Restaurar valores de f&aacute;brica</button>
             </div>
             <div class="opt-desc" id="defaultsMsg" style="min-height:1.2em"></div>
+          </div>
+          <div class="opt-row">
+            <div class="opt-label">Perfiles de configuraci&oacute;n</div>
+            <div class="opt-desc">Guard&aacute; configuraciones completas con nombre y aplicalas con un click &mdash; ideal si distintas personas o proyectos usan el programa con gustos distintos, sin tocar tu valor predeterminado.</div>
+            <div class="btn-row">
+              <input type="text" id="profileName" class="text-input" maxlength="40"
+                     placeholder="Nombre del perfil (p. ej. &laquo;Ensayo TV del sal&oacute;n&raquo;)" style="flex:1; min-width:180px">
+              <button class="ed-btn" id="btnSaveProfile" type="button">&#43; Guardar perfil</button>
+            </div>
+            <div class="profile-list" id="profileList"></div>
+            <div class="opt-desc" id="profileMsg" style="min-height:1.2em"></div>
           </div>
         </div>
 
@@ -1183,6 +1211,80 @@ document.getElementById("btnFactoryDefaults").addEventListener("click", () => {
   applySettings(FACTORY);
   document.getElementById("defaultsMsg").textContent = "Valores de fábrica restaurados.";
 });
+
+// ── perfiles de configuración con nombre ─────────────────────────────────────
+// Independientes del valor predeterminado: aplicar un perfil cambia TODA la
+// configuración a como se guardó bajo ese nombre (ss_profiles en localStorage).
+const profileName = document.getElementById("profileName");
+const profileList = document.getElementById("profileList");
+const profileMsg  = document.getElementById("profileMsg");
+function loadProfiles() {
+  try { return JSON.parse(localStorage.getItem("ss_profiles") || "{}") || {}; }
+  catch (e) { return {}; }
+}
+function storeProfiles(o) {
+  try { localStorage.setItem("ss_profiles", JSON.stringify(o)); return true; }
+  catch (e) { return false; }
+}
+let profDelArm = null;   // nombre "armado" para confirmar el borrado
+function renderProfiles() {
+  const o = loadProfiles();
+  const names = Object.keys(o).sort((a, b) => a.localeCompare(b, "es"));
+  profileList.innerHTML = "";
+  profileList.style.display = names.length ? "" : "none";
+  for (const nm of names) {
+    const chip = document.createElement("span");
+    chip.className = "profile-chip";
+    const apply = document.createElement("button");
+    apply.type = "button"; apply.className = "profile-apply";
+    apply.textContent = nm;
+    apply.title = "Aplicar este perfil (cambia toda la configuración)";
+    apply.addEventListener("click", () => {
+      applySettings({ ...FACTORY, ...o[nm] });
+      profileMsg.textContent = `✓ Perfil «${nm}» aplicado.`;
+      profDelArm = null; renderProfiles();
+    });
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "profile-del";
+    if (profDelArm === nm) {
+      del.textContent = "¿borrar?"; del.classList.add("armed");
+      del.title = "Click de nuevo para borrar definitivamente";
+    } else {
+      del.textContent = "✕"; del.title = `Borrar el perfil «${nm}»`;
+    }
+    del.addEventListener("click", () => {
+      if (profDelArm !== nm) { profDelArm = nm; renderProfiles(); return; }
+      const oo = loadProfiles(); delete oo[nm]; storeProfiles(oo);
+      profDelArm = null;
+      profileMsg.textContent = `Perfil «${nm}» borrado.`;
+      renderProfiles();
+    });
+    chip.appendChild(apply); chip.appendChild(del);
+    profileList.appendChild(chip);
+  }
+}
+document.getElementById("btnSaveProfile").addEventListener("click", () => {
+  const nm = profileName.value.trim();
+  if (!nm) { profileMsg.textContent = "Escribí un nombre para el perfil."; return; }
+  const o = loadProfiles();
+  const existed = nm in o;
+  if (!existed && Object.keys(o).length >= 40) {
+    profileMsg.textContent = "Demasiados perfiles (máx. 40) — borrá alguno primero.";
+    return;
+  }
+  o[nm] = gatherSettings();
+  profileMsg.textContent = storeProfiles(o)
+    ? (existed ? `✓ Perfil «${nm}» actualizado con la configuración actual.`
+               : `✓ Perfil «${nm}» guardado.`)
+    : "No se pudo guardar en este navegador.";
+  profileName.value = "";
+  profDelArm = null;
+  renderProfiles();
+});
+profileName.addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("btnSaveProfile").click();
+});
+renderProfiles();
 
 // ─── generate ────────────────────────────────────────────────────────────────
 btnGenerate.addEventListener("click", async () => {
