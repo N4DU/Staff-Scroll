@@ -56,7 +56,7 @@ def find_musescore():
         if path and os.path.isfile(path):
             return path
     raise RuntimeError(
-        "No se encontró MuseScore. Instalá MuseScore 3 o 4 desde https://musescore.org"
+        "No se encontró MuseScore. Instala MuseScore 3 o 4 desde https://musescore.org"
     )
 
 def _run_mscore(mscore_bin, args, workdir=None):
@@ -107,55 +107,26 @@ def _extract_and_patch_mscz(mscz_path, mscx_dir):
     out_path.write_text(content, encoding="utf-8")
     return str(out_path), base
 
-def _spilled(out_dir, i, ext):
-    """True si MuseScore escribió más de una hoja para la página i."""
-    first = os.path.join(out_dir, f"{i}-score-1.{ext}")
-    if not os.path.isfile(first):
-        raise RuntimeError(
-            f"MuseScore no generó la salida esperada para la página {i} ({ext}).")
-    return os.path.isfile(os.path.join(out_dir, f"{i}-score-2.{ext}"))
-
-
-def _clean_outputs(out_dir, i, ext):
-    """Borra las salidas previas de la página i (evita hojas -2 rancias de un
-    intento anterior al reintentar con otro estilo)."""
+def _rendered_sheets(out_dir, prefix, ext):
+    """Hojas que MuseScore escribió para `prefix` (prefix-1.ext, -2.ext…),
+    ordenadas por número de hoja."""
+    outs = []
     for f in os.listdir(out_dir):
-        if re.fullmatch(rf"{i}-score(-\d+)?\.{ext}", f):
+        m = re.fullmatch(rf"{re.escape(prefix)}-(\d+)\.{ext}", f)
+        if m:
+            outs.append((int(m.group(1)), os.path.join(out_dir, f)))
+    return [p for _n, p in sorted(outs)]
+
+
+def _clean_outputs(out_dir, prefix, ext):
+    """Borra salidas previas de `prefix` (evita hojas rancias de renders
+    anteriores que confundirían el conteo)."""
+    for f in os.listdir(out_dir):
+        if re.fullmatch(rf"{re.escape(prefix)}(-\d+)?\.{ext}", f):
             try:
                 os.remove(os.path.join(out_dir, f))
             except OSError:
                 pass
-
-
-def _grow_page_height(mscx_path, factor):
-    """Reescribe el <pageHeight> del mscx multiplicado por `factor`.
-    Devuelve True si pudo aplicarlo."""
-    try:
-        content = Path(mscx_path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    m = re.search(r"<pageHeight>([\d.]+)</pageHeight>", content)
-    if m:
-        new_h = float(m.group(1)) * factor
-        content = content.replace(m.group(0), f"<pageHeight>{new_h:.5f}</pageHeight>", 1)
-    elif "<Style>" in content:
-        # sin pageHeight declarado: insertar uno (A4 = 11.69 pulgadas)
-        content = content.replace(
-            "<Style>", f"<Style>\n      <pageHeight>{11.6902 * factor:.5f}</pageHeight>", 1)
-    else:
-        return False
-    Path(mscx_path).write_text(content, encoding="utf-8")
-    return True
-
-
-# Factores de crecimiento de la hoja que se prueban, en orden, cuando una
-# página no entra en una sola hoja. La versión de MuseScore que RENDERIZA
-# puede tener fuentes distintas a la que GUARDÓ el archivo y desbordar el
-# último sistema a una segunda hoja. Alargar la hoja (pageHeight del mscx —
-# los estilos -S no pueden tocar el layout de página) lo devuelve a una sola:
-# el motor no necesita hojas A4, apila y recorta páginas de cualquier alto,
-# y la música no cambia en absoluto (la geometría se mide del SVG final).
-_FIT_GROWTH = (1.0, 1.18, 1.4, 1.7, 2.1)
 
 
 # ─── main pipeline ────────────────────────────────────────────────────────────
@@ -185,6 +156,9 @@ def process_mscz_files(mscz_paths, workdir, progress=None):
     from progress import Progress
     progress = progress or Progress()
 
+    # absoluto SIEMPRE: MuseScore corre con otro cwd y una ruta relativa
+    # escribiría las salidas en cualquier lado
+    workdir = os.path.abspath(workdir)
     os.makedirs(workdir, exist_ok=True)
     mscx_dir = os.path.join(workdir, "mscx")
     png_dir  = os.path.join(workdir, "png")
@@ -206,56 +180,54 @@ def process_mscz_files(mscz_paths, workdir, progress=None):
                 shutil.move(mscx_path, canonical)
             ph.update((idx + 1) / n, Path(mscz_path).name)
 
-    # Phase 2: render PNG + SVG (one MuseScore call per file). Si la hoja
-    # desborda (la versión de MuseScore que renderiza distribuye distinto que
-    # la que guardó el archivo), se reintenta alargando la hoja en el mscx —
-    # PNG y SVG salen SIEMPRE del mismo mscx, su geometría debe coincidir.
+    # Phase 2: render PNG + SVG (una llamada a MuseScore por archivo). Un
+    # archivo puede traer VARIAS hojas (una parte de la canción o la canción
+    # entera): cada hoja se convierte en una página del video, en orden, y se
+    # puede mezclar libremente con archivos de una sola hoja. Se renderiza
+    # con un prefijo temporal y luego se renumera a páginas 1..P canónicas
+    # (así el resto de la app no distingue de dónde vino cada página).
+    src_map = {}         # página virtual → (archivo origen, nº hoja, total)
+    page_no = 0
     with progress.phase("Renderizando páginas (MuseScore)", span=(8, 72)) as ph:
         for idx, i in enumerate(file_nums):
             mscx = os.path.join(mscx_dir, f"{i}-score.mscx")
 
-            fitted = False
-            prev_growth = 1.0
-            for growth in _FIT_GROWTH:
-                if growth > 1.0:
-                    # el factor es acumulativo sobre el archivo ya parcheado
-                    if not _grow_page_height(mscx, growth / prev_growth):
-                        break
-                    prev_growth = growth
-                note = "" if growth == 1.0 else f" (hoja alargada ×{growth:g})"
-                ph.update((idx * 2) / (n * 2), f"página {i}/{n} · PNG{note}")
-                _clean_outputs(png_dir, i, "png")
-                png_out = os.path.join(png_dir, f"{i}-score.png")
-                r = _run_mscore(mscore, ["-o", png_out, "-r", str(PNG_DPI), mscx])
-                if r.returncode != 0 and "success" not in r.stdout.lower():
-                    raise RuntimeError(f"MuseScore falló renderizando el PNG de la página {i}:\n{r.stderr[:500]}")
-                if not _spilled(png_dir, i, "png"):
-                    fitted = True
-                    break
-            if not fitted:
-                raise RuntimeError(
-                    f"El archivo {i} tiene más contenido del que entra en una "
-                    "hoja (incluso alargándola al doble). Esta app espera un "
-                    ".mscz por hoja: dividí esa página en dos archivos y volvé "
-                    "a subirlos.")
-
-            ph.update((idx * 2 + 1) / (n * 2), f"página {i}/{n} · SVG")
-            _clean_outputs(svg_dir, i, "svg")
-            svg_out = os.path.join(svg_dir, f"{i}-score.svg")
-            r = _run_mscore(mscore, ["-o", svg_out, mscx])
+            ph.update((idx * 2) / (n * 2), f"archivo {i}/{n} · PNG")
+            _clean_outputs(png_dir, f"tmp{i}-score", "png")
+            r = _run_mscore(mscore, ["-o", os.path.join(png_dir, f"tmp{i}-score.png"),
+                                     "-r", str(PNG_DPI), mscx])
             if r.returncode != 0 and "success" not in r.stdout.lower():
-                raise RuntimeError(f"MuseScore falló renderizando el SVG de la página {i}:\n{r.stderr[:500]}")
-            if _spilled(svg_dir, i, "svg"):
+                raise RuntimeError(f"MuseScore falló renderizando el PNG del archivo {i}:\n{r.stderr[:500]}")
+            pngs = _rendered_sheets(png_dir, f"tmp{i}-score", "png")
+            if not pngs:
+                raise RuntimeError(f"MuseScore no generó ninguna hoja para el archivo {i}.")
+
+            ph.update((idx * 2 + 1) / (n * 2), f"archivo {i}/{n} · SVG")
+            _clean_outputs(svg_dir, f"tmp{i}-score", "svg")
+            r = _run_mscore(mscore, ["-o", os.path.join(svg_dir, f"tmp{i}-score.svg"), mscx])
+            if r.returncode != 0 and "success" not in r.stdout.lower():
+                raise RuntimeError(f"MuseScore falló renderizando el SVG del archivo {i}:\n{r.stderr[:500]}")
+            svgs = _rendered_sheets(svg_dir, f"tmp{i}-score", "svg")
+            if len(svgs) != len(pngs):
                 raise RuntimeError(
-                    f"La página {i} rinde distinto en PNG y SVG (desborde solo "
-                    "en SVG) — reportalo con el archivo en cuestión.")
-            ph.update((idx + 1) / n, f"página {i}/{n} ✓")
+                    f"El archivo {i} rinde {len(pngs)} hojas en PNG pero "
+                    f"{len(svgs)} en SVG — repórtalo adjuntando el archivo en cuestión.")
+
+            # renumerar cada hoja como página canónica del video
+            for s, (png_p, svg_p) in enumerate(zip(pngs, svgs), start=1):
+                page_no += 1
+                os.replace(png_p, os.path.join(png_dir, f"{page_no}-score-1.png"))
+                os.replace(svg_p, os.path.join(svg_dir, f"{page_no}-score-1.svg"))
+                src_map[page_no] = (i, s, len(pngs))
+            extra = f" ({len(pngs)} hojas)" if len(pngs) > 1 else ""
+            ph.update((idx + 1) / n, f"archivo {i}/{n}{extra} ✓")
 
     # Return engine config dict (all defaults, paths filled in)
     return {
         "mscx_dir":  mscx_dir,
         "png_dir":   png_dir,
         "svg_dir":   svg_dir,
-        "file_nums": file_nums,
+        "file_nums": list(range(1, page_no + 1)),
         "name_tpl":  "{i}-score",
+        "src_map":   src_map,
     }

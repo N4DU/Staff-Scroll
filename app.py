@@ -84,12 +84,12 @@ def create_app():
         options = data.get("options", {})
 
         if not job_id or job_id not in jobs:
-            return jsonify({"error": "Job no encontrado"}), 404
+            return jsonify({"error": "Trabajo no encontrado"}), 404
 
         job = jobs[job_id]
         with _jobs_lock:
             if job.get("started"):
-                return jsonify({"error": "Ya está en proceso"}), 409
+                return jsonify({"error": "El trabajo ya está en proceso"}), 409
             job["started"] = True
 
         t = threading.Thread(target=_run_job, args=(job_id, options), daemon=True)
@@ -102,7 +102,7 @@ def create_app():
             import time, json
             while True:
                 if job_id not in jobs:
-                    yield f"data: {json.dumps({'pct': 0, 'msg': 'Job no encontrado', 'done': True, 'error': 'not_found'})}\n\n"
+                    yield f"data: {json.dumps({'pct': 0, 'msg': 'Trabajo no encontrado', 'done': True, 'error': 'not_found'})}\n\n"
                     break
                 j = jobs[job_id]
                 payload = {"pct": j["pct"], "msg": j["msg"], "done": j["done"],
@@ -121,7 +121,7 @@ def create_app():
     @app.route("/download/<job_id>")
     def download(job_id):
         if job_id not in jobs:
-            return jsonify({"error": "Job no encontrado"}), 404
+            return jsonify({"error": "Trabajo no encontrado"}), 404
         j = jobs[job_id]
         if not j["done"] or j["error"]:
             return jsonify({"error": "Video no disponible"}), 425
@@ -204,7 +204,7 @@ def create_app():
         # que habilita finalizar. Un error de un finalize ANTERIOR no bloquea
         # el reintento (j["error"] se limpia al arrancar de nuevo).
         if not j or not j.get("render"):
-            return jsonify({"error": "Job no está listo"}), 409
+            return jsonify({"error": "El trabajo aún no está listo"}), 409
         data = request.get_json(silent=True) or {}
         skip = bool(data.get("skip"))
         try:
@@ -294,7 +294,7 @@ def _run_job(job_id, options):
         # fallar en milisegundos, no después de minutos de render de MuseScore.
         user_cfg = _sanitize_options(options)
 
-        prog(2, "Iniciando pipeline…")
+        prog(2, "Iniciando el proceso…")
         workdir    = j["workdir"]
         mscz_paths = j["mscz_paths"]
         render_dir = os.path.join(workdir, "render")
@@ -714,7 +714,7 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
             while not r["done"]:
                 if time.time() - t_wait0 > 4 * 3600:
                     raise RuntimeError("El render de fondo no respondió en 4 "
-                                       "horas — reiniciá el programa y reintentá.")
+                                       "horas — reinicia el programa y vuelve a intentarlo.")
                 prog(5 + int(r["pct"] * 0.75),
                      f"Renderizando el video… ({r['pct']}%)")
                 time.sleep(0.3)
@@ -811,6 +811,6 @@ def _find_ffmpeg():
     if found:
         return found
     raise RuntimeError(
-        "ffmpeg no encontrado. Colocá ffmpeg.exe en la carpeta vendor/ "
-        "o agregalo al PATH del sistema."
+        "ffmpeg no encontrado. Coloca ffmpeg.exe en la carpeta vendor/ "
+        "o agrégalo al PATH del sistema."
     )

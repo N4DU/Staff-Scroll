@@ -58,6 +58,9 @@ DEFAULT_CONFIG = {
     "svg_dir":   None,
     "file_nums": None,
     "name_tpl":  "{i}-score",
+    # Archivos con VARIAS hojas: {página_virtual: (archivo_origen, nº_de_hoja,
+    # total_de_hojas_del_origen)}. None = una hoja por archivo (clásico).
+    "src_map":   None,
 }
 
 # Padding (en unidades SVG) que se conserva sobre la primera página y bajo la
@@ -565,8 +568,56 @@ class ScoreEngine:
         self.layouts    = {i: _parse_svg_layout(f"{cfg['svg_dir']}/{tpl.format(i=i)}-1.svg")
                            for i in file_nums}
         _ph(0.10, "leyendo la música (MSCX)")
-        self.score_data = {i: _parse_score_xml(f"{cfg['mscx_dir']}/{tpl.format(i=i)}.mscx")
-                           for i in file_nums}
+        # src_map: cada página virtual sabe de qué archivo .mscx viene y qué
+        # hoja de ese archivo es. Sin src_map (uso clásico y tests), cada
+        # página ES su archivo.
+        src_map = cfg.get("src_map") or {i: (i, 1, 1) for i in file_nums}
+        self._src_map = src_map
+        pages_by_src = {}
+        for p in file_nums:
+            pages_by_src.setdefault(src_map[p][0], []).append(p)
+        srcs = {s: _parse_score_xml(f"{cfg['mscx_dir']}/{tpl.format(i=s)}.mscx")
+                for s in pages_by_src}
+
+        # score_data POR PÁGINA + orden de reproducción GLOBAL. Para archivos
+        # de varias hojas, los compases del .mscx se reparten entre sus hojas
+        # contando las barras de compás del SVG de cada una; las repeticiones
+        # pueden cruzar hojas (el orden global (página, compás) lo permite).
+        self.score_data = {}
+        self._play_order = []
+        for s, pages in pages_by_src.items():
+            full = srcs[s]
+            if len(pages) == 1 and src_map[pages[0]][2] == 1:
+                self.score_data[pages[0]] = full
+                self._play_order += [(pages[0], m) for m in full["played"]]
+                continue
+            counts = []
+            for p in pages:
+                sb = self.layouts[p].get("sys_bounds")
+                if not sb:
+                    raise ValueError(
+                        f"El archivo {s} tiene varias hojas pero el SVG de una "
+                        "de ellas no trae barras de compás legibles — no se "
+                        "puede saber qué compás cae en qué hoja.")
+                counts.append(sum(len(b) - 1 for b in sb))
+            if sum(counts) != full["n_measures"]:
+                raise ValueError(
+                    f"El archivo {s} tiene {full['n_measures']} compases pero "
+                    f"sus {len(pages)} hojas suman {sum(counts)} — no se puede "
+                    "repartir la música entre las hojas con seguridad. Prueba "
+                    "dividir ese archivo en un .mscz por hoja y vuelve a subirlo.")
+            starts = [0]
+            for c in counts:
+                starts.append(starts[-1] + c)
+            for k, p in enumerate(pages):
+                a, b = starts[k], starts[k + 1]
+                self.score_data[p] = {"measures": full["measures"][a:b],
+                                      "n_measures": b - a,
+                                      "played": list(range(b - a))}
+            for gm in full["played"]:
+                k = bisect.bisect_right(starts, gm) - 1
+                self._play_order.append((pages[k], gm - starts[k]))
+
         _ph(0.20, "geometría por compás")
         self._fidx = {fn: idx for idx, fn in enumerate(file_nums)}
 
@@ -651,8 +702,9 @@ class ScoreEngine:
                 else:
                     m["qps"] = qps_cur
 
+        src0 = src_map[file_nums[0]][0]
         self.song_name = cfg.get("song_name") or _extract_title(
-            f"{cfg['mscx_dir']}/{tpl.format(i=file_nums[0])}.mscx") or "Scrolling Score"
+            f"{cfg['mscx_dir']}/{tpl.format(i=src0)}.mscx") or "Scrolling Score"
 
         # Dimensiones del video
         fn0  = file_nums[0]
@@ -816,12 +868,12 @@ class ScoreEngine:
 
         # Sistemas que contienen repeticiones (se recorren más de una pasada):
         # en ellos el avance se reparte por número de pasada, no por compás.
+        # self._play_order es el orden GLOBAL (página, compás): admite
+        # archivos de varias hojas y repeticiones que cruzan de hoja.
         total_plays, repeated_sys = {}, set()
-        for fn in file_nums:
-            sd = self.score_data[fn]
-            for m in sd["played"]:
-                s = self.measure_map[fn][m][0]
-                total_plays[(fn, s)] = total_plays.get((fn, s), 0) + 1
+        for fn, m in self._play_order:
+            s = self.measure_map[fn][m][0]
+            total_plays[(fn, s)] = total_plays.get((fn, s), 0) + 1
         for (f, s), c in total_plays.items():
             if c > sys_count[(f, s)]:
                 repeated_sys.add((f, s))
@@ -835,29 +887,28 @@ class ScoreEngine:
 
         base_kf, timeline = [], []
         t, sys_play_count = 0.0, {}
-        for fidx, fn in enumerate(file_nums):
-            sd = self.score_data[fn]
-            for m_idx in sd["played"]:
-                info  = sd["measures"][m_idx]
-                dur   = info["beats"] / info["qps"]      # segundos de este compás
-                sys_i = self.measure_map[fn][m_idx][0]
-                key   = (fn, sys_i)
-                count_before = sys_play_count.get(key, 0)
-                total = total_plays.get(key, 1)
-                n_in_sys = sys_count[key]
-                frac  = (sys_pos[(fn, m_idx)] / n_in_sys if key not in repeated_sys
-                         else count_before / total)
-                y0 = self._sys_top(fn, fidx, sys_i)
-                gi = sys_gidx[key]
-                # El ÚLTIMO sistema global no tiene "sistema siguiente" al que
-                # avanzar: se fija en la línea lectora (y1 = y0) para que el
-                # scroll se detenga ahí, con la última línea centrada y el resto
-                # de la hoja debajo, en vez de seguir bajando al vacío.
-                y1 = all_sys[gi + 1] if gi + 1 < len(all_sys) else y0
-                base_kf.append((t, y0 + (y1 - y0) * frac))
-                timeline.append((t, dur, fn, m_idx, info["beats"], round(info["qps"] * 60)))
-                sys_play_count[key] = count_before + 1
-                t += dur
+        for fn, m_idx in self._play_order:
+            fidx  = self._fidx[fn]
+            info  = self.score_data[fn]["measures"][m_idx]
+            dur   = info["beats"] / info["qps"]      # segundos de este compás
+            sys_i = self.measure_map[fn][m_idx][0]
+            key   = (fn, sys_i)
+            count_before = sys_play_count.get(key, 0)
+            total = total_plays.get(key, 1)
+            n_in_sys = sys_count[key]
+            frac  = (sys_pos[(fn, m_idx)] / n_in_sys if key not in repeated_sys
+                     else count_before / total)
+            y0 = self._sys_top(fn, fidx, sys_i)
+            gi = sys_gidx[key]
+            # El ÚLTIMO sistema global no tiene "sistema siguiente" al que
+            # avanzar: se fija en la línea lectora (y1 = y0) para que el
+            # scroll se detenga ahí, con la última línea centrada y el resto
+            # de la hoja debajo, en vez de seguir bajando al vacío.
+            y1 = all_sys[gi + 1] if gi + 1 < len(all_sys) else y0
+            base_kf.append((t, y0 + (y1 - y0) * frac))
+            timeline.append((t, dur, fn, m_idx, info["beats"], round(info["qps"] * 60)))
+            sys_play_count[key] = count_before + 1
+            t += dur
         self._music_end_t = t
 
         # Saltos de repetición hacia atrás: mantener la lectura de la línea

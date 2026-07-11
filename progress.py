@@ -231,7 +231,7 @@ class _Console:
             src = next((l.strip() for l in reversed(last) if l.strip().startswith("File ")), "")
             if src:
                 print(f"    {c.dim}{src}{c.off}", flush=True)
-        print(f"    {c.dim}Si el problema persiste, reportalo (copiando estas "
+        print(f"    {c.dim}Si el problema persiste, repórtalo (copiando estas "
               f"líneas) en:{c.off} {ISSUES_URL}", flush=True)
 
     def _clear_live(self):
@@ -349,5 +349,5 @@ class Progress:
             return   # la fase que falló ya lo reportó con detalle
         c = CONSOLE.c
         CONSOLE.println(f"  {c.red}✗ Error: {exc}{c.off}")
-        CONSOLE.println(f"    {c.dim}Si el problema persiste, reportalo en:{c.off} "
+        CONSOLE.println(f"    {c.dim}Si el problema persiste, repórtalo en:{c.off} "
                         f"{ISSUES_URL}")
