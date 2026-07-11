@@ -213,8 +213,31 @@ def _parse_svg_layout(svg_path):
             continue
         xs_g = [float(v) for v in nums[0::2]]
         ys_g = [float(v) for v in nums[1::2]]
-        note_pts.append(((min(xs_g) + max(xs_g)) / 2,
-                         (min(ys_g) + max(ys_g)) / 2))
+        cx = (min(xs_g) + max(xs_g)) / 2
+        cy = (min(ys_g) + max(ys_g)) / 2
+        # Algunas versiones de MuseScore exportan la nota con coordenadas
+        # LOCALES (alrededor del origen) y la posición real en un
+        # transform="matrix(...)"/"translate(...)" — sin aplicarlo, todas las
+        # notas caían en (≈0,≈0) y el mapa de pulsos quedaba vacío.
+        tr = re.search(r'transform="matrix\(([^)]+)\)"', tag)
+        if tr:
+            try:
+                a, b, c, d, e, f = [float(v) for v in
+                                    re.split(r"[,\s]+", tr.group(1).strip())]
+                cx, cy = a * cx + c * cy + e, b * cx + d * cy + f
+            except ValueError:
+                continue
+        else:
+            tr = re.search(r'transform="translate\(([^)]+)\)"', tag)
+            if tr:
+                try:
+                    parts = [float(v) for v in
+                             re.split(r"[,\s]+", tr.group(1).strip())]
+                    cx += parts[0]
+                    cy += parts[1] if len(parts) > 1 else 0.0
+                except ValueError:
+                    continue
+        note_pts.append((cx, cy))
 
 
     return {"w": w, "h": h,
