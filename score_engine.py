@@ -70,6 +70,17 @@ _FADE_DUR = 0.8     # duración del fundido del encabezado, s
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
+def _beat_count(beats):
+    """Cantidad de pulsos visibles de un compás. Con una cantidad entera de
+    negras usa esa cantidad (4/4 → 4); con métricas fraccionarias (5/8 → 2.5
+    negras) baja a la grilla de corcheas (5 pulsos) — redondear 2.5 a 2
+    desincronizaba el modo 'de a saltitos' y los puntos de pulso."""
+    nb = int(round(beats))
+    if abs(beats - nb) > 1e-6:
+        nb = int(round(beats * 2))
+    return max(1, nb)
+
+
 def _compose_rgba(img_rgba, bg=(255, 255, 255)):
     arr = np.array(img_rgba, dtype=np.float32)
     rgb, a = arr[:, :, :3], arr[:, :, 3:4] / 255.0
@@ -202,8 +213,31 @@ def _parse_svg_layout(svg_path):
             continue
         xs_g = [float(v) for v in nums[0::2]]
         ys_g = [float(v) for v in nums[1::2]]
-        note_pts.append(((min(xs_g) + max(xs_g)) / 2,
-                         (min(ys_g) + max(ys_g)) / 2))
+        cx = (min(xs_g) + max(xs_g)) / 2
+        cy = (min(ys_g) + max(ys_g)) / 2
+        # Algunas versiones de MuseScore exportan la nota con coordenadas
+        # LOCALES (alrededor del origen) y la posición real en un
+        # transform="matrix(...)"/"translate(...)" — sin aplicarlo, todas las
+        # notas caían en (≈0,≈0) y el mapa de pulsos quedaba vacío.
+        tr = re.search(r'transform="matrix\(([^)]+)\)"', tag)
+        if tr:
+            try:
+                a, b, c, d, e, f = [float(v) for v in
+                                    re.split(r"[,\s]+", tr.group(1).strip())]
+                cx, cy = a * cx + c * cy + e, b * cx + d * cy + f
+            except ValueError:
+                continue
+        else:
+            tr = re.search(r'transform="translate\(([^)]+)\)"', tag)
+            if tr:
+                try:
+                    parts = [float(v) for v in
+                             re.split(r"[,\s]+", tr.group(1).strip())]
+                    cx += parts[0]
+                    cy += parts[1] if len(parts) > 1 else 0.0
+                except ValueError:
+                    continue
+        note_pts.append((cx, cy))
 
 
     return {"w": w, "h": h,
@@ -588,10 +622,13 @@ class ScoreEngine:
 
         # El tempo se hereda de página en página: cada archivo .mscz es una
         # hoja de la misma obra y normalmente solo la primera trae la marca.
-        qps_cur = cfg["bpm"] / 60.0
+        qps_cur = max(cfg["bpm"], 1) / 60.0
         for fn in file_nums:
             for m in self.score_data[fn]["measures"]:
-                if m["qps"]:
+                # tempo ≤ 0 = marca corrupta en el .mscx: se ignora y se
+                # hereda el anterior (un qps negativo daría duraciones
+                # negativas y rompería toda la línea de tiempo)
+                if m["qps"] and m["qps"] > 0:
                     qps_cur = m["qps"]
                 else:
                     m["qps"] = qps_cur
@@ -944,15 +981,23 @@ class ScoreEngine:
         scroll_f = self._scroll_y_at(time_s) - self.playhead_y
         scroll_f = min(max(scroll_f, 0.0), float(self.canvas_h - self.video_h))
         fs = int(scroll_f)
-        frac = scroll_f - fs
-
-        a = self.canvas_np[fs:fs + self.video_h].astype(np.float32)
-        if frac > 1e-3 and fs + self.video_h < self.canvas_h:
-            b = self.canvas_np[fs + 1:fs + 1 + self.video_h].astype(np.float32)
-            frame = (a * (1.0 - frac) + b * frac).astype(np.uint8)
+        # Peso de interpolación en 1/256avos: la mezcla se hace con enteros
+        # uint16 (a*(256-w) + b*w) >> 8 — visualmente idéntica a la float pero
+        # ~3x más rápida (el render por frame es el costo dominante del video).
+        w = int((scroll_f - fs) * 256.0 + 0.5)
+        if w >= 256:
+            fs += 1
+            w = 0
+        if w <= 0 or fs + 1 + self.video_h > self.canvas_h:
+            # .copy(): el frame se pinta encima (header, puntos, playhead) y
+            # NUNCA debe compartir memoria con el lienzo maestro
+            frame = self.canvas_np[fs:fs + self.video_h].copy()
         else:
+            a = self.canvas_np[fs:fs + self.video_h].astype(np.uint16)
+            a *= 256 - w
+            a += self.canvas_np[fs + 1:fs + 1 + self.video_h].astype(np.uint16) * w
+            a >>= 8
             frame = a.astype(np.uint8)
-        frame = np.ascontiguousarray(frame)
 
         # Compás activo
         t0, dur, fn, mi, beats, bpm = self._timeline_at(time_s)
@@ -1024,26 +1069,33 @@ class ScoreEngine:
 
         # ── Encabezado: aparece cuando empieza la segunda línea ──────────────
         h_prog = max(0.0, min(1.0, (time_s - self._t_second_line) / _FADE_DUR))
-        if h_prog > 0.01 and cfg.get("show_header", True):
+        # (con un video más bajo que el encabezado no hay dónde dibujarlo)
+        if h_prog > 0.01 and cfg.get("show_header", True) and self.video_h > _HEADER_H + 20:
             hdr = self._header_strip(fn, bpm)
-            region = frame[:_HEADER_H].astype(np.float32)
-            frame[:_HEADER_H] = (region * (1 - h_prog) +
-                                 hdr.astype(np.float32) * h_prog).astype(np.uint8)
+            if h_prog >= 0.995:
+                frame[:_HEADER_H] = hdr        # fundido terminado: copia directa
+            else:
+                region = frame[:_HEADER_H].astype(np.float32)
+                frame[:_HEADER_H] = (region * (1 - h_prog) +
+                                     hdr.astype(np.float32) * h_prog).astype(np.uint8)
 
-        # ── Puntos de pulso (solo se convierte a PIL la franja inferior) ─────
-        nb   = max(1, int(round(beats)))
+        # ── Puntos de pulso (blit directo con máscara circular, sin PIL) ─────
+        nb   = _beat_count(beats)
         beat = min(int(m_prog * nb), nb - 1)
         dr, gap_px = 8, 22
-        strip_top = max(0, self.video_h - 48)
-        strip_pil = Image.fromarray(frame[strip_top:, :, ::-1])
-        draw = ImageDraw.Draw(strip_pil)
+        mask = getattr(self, "_dot_mask", None)
+        if mask is None:
+            yy, xx = np.mgrid[-dr:dr + 1, -dr:dr + 1]
+            mask = self._dot_mask = (xx * xx + yy * yy) <= dr * dr + dr // 2
         x0  = (self.video_w - nb * gap_px) // 2
-        cy2 = (self.video_h - 30) - strip_top
+        cy2 = self.video_h - 30
         for b in range(nb):
             cx3 = x0 + b * gap_px + gap_px // 2
-            clr = (255, 190, 50) if b == beat else (55, 55, 55)
-            draw.ellipse([(cx3 - dr, cy2 - dr), (cx3 + dr, cy2 + dr)], fill=clr)
-        frame[strip_top:] = np.array(strip_pil)[:, :, ::-1]
+            clr = (50, 190, 255) if b == beat else (55, 55, 55)   # frame es BGR
+            y0d, x0d = cy2 - dr, cx3 - dr
+            if y0d < 0 or x0d < 0 or cx3 + dr + 1 > self.video_w:
+                continue
+            frame[y0d:cy2 + dr + 1, x0d:cx3 + dr + 1][mask] = clr
 
         # ── Línea vertical de playhead ───────────────────────────────────────
         # Rango exacto del compás (barlines) + posiciones grabadas de cada
@@ -1053,7 +1105,7 @@ class ScoreEngine:
             sv = self._svg_scale[fn]
             if cfg.get("playhead_mode") == "beats":
                 # de a saltitos: la línea queda clavada en el tiempo actual
-                nbq = max(1, int(round(beats)))
+                nbq = _beat_count(beats)
                 bq  = min(nbq - 1, int(m_prog * nbq + 1e-6))
                 x_svg = self._measure_x_at(fn, mi, bq / nbq, beats, mx0, mx1)
             else:

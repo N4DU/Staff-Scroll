@@ -61,6 +61,31 @@ def waveform_peaks(samples, n_buckets=_N_BUCKETS):
             "maxs": [round(float(v), 3) for v in chunks.max(axis=1)]}
 
 
+_ENV_RATE = 400      # ventanas/s de la envolvente de alta resolución (2.5 ms)
+
+
+def waveform_envelope(samples, sr=_SR, rate=_ENV_RATE):
+    """Envolvente de ALTA resolución para el editor: por cada ventana de
+    1/rate segundos, (mín, máx, rms) como int8 relativos al pico global.
+    Binario compacto (3 bytes por ventana ≈ 1.2 KB/s de canción): el editor
+    lo descarga aparte del JSON y dibuja la onda por píxel a cualquier zoom,
+    con el cuerpo (rms) y los picos bien diferenciados."""
+    n = len(samples)
+    win = max(1, int(round(sr / rate)))
+    nb = n // win
+    if nb == 0:
+        return b"", rate
+    x = samples[:nb * win].reshape(nb, win)
+    peak = max(1e-9, float(np.max(np.abs(samples))))
+    mins = np.clip(x.min(axis=1) / peak * 127.0, -127, 127).astype(np.int8)
+    maxs = np.clip(x.max(axis=1) / peak * 127.0, -127, 127).astype(np.int8)
+    rms = np.sqrt(np.mean(x.astype(np.float32) ** 2, axis=1))
+    rms = np.clip(rms / peak * 127.0, 0, 127).astype(np.int8)
+    out = np.empty(nb * 3, dtype=np.int8)
+    out[0::3], out[1::3], out[2::3] = mins, maxs, rms
+    return out.tobytes(), rate
+
+
 def detect_onsets(samples, sr=_SR):
     """Onsets por flujo espectral con umbral adaptativo (mediana local).
 
@@ -104,15 +129,19 @@ def analyze_audio(ffmpeg_bin, audio_path, phase=None):
 
     _ph(0.05, "decodificando la canción")
     samples, sr = decode_audio(ffmpeg_bin, audio_path)
-    _ph(0.55, "forma de onda")
+    _ph(0.50, "forma de onda")
     wf = waveform_peaks(samples)
-    _ph(0.70, "detectando golpes")
+    env, env_rate = waveform_envelope(samples, sr)
+    _ph(0.65, "detectando golpes")
     onsets = detect_onsets(samples, sr)
     _ph(0.98, f"{len(onsets)} golpes detectados")
     return {
         "duration": round(len(samples) / sr, 3),
         "waveform": wf,
         "onsets":   onsets,
+        # binario (no entra en el JSON del editor): lo sirve /wavepeaks
+        "envelope": env,
+        "envelope_rate": env_rate,
     }
 
 
@@ -145,6 +174,10 @@ def build_mux_command(ffmpeg_bin, video_path, audio_path, out_path,
         achain.append(f"adelay={delay_ms}:all=1")
     if fade_out > 0 and total > fade_out:
         achain.append(f"afade=t=out:st={max(0.0, total - fade_out):.4f}:d={fade_out:.3f}")
+    # apad: si la canción termina antes que el video, se rellena con silencio
+    # (el -t final lo recorta). Sin esto las pistas quedaban de duraciones
+    # distintas y algunos reproductores cortan el video al morir el audio.
+    achain.append("apad")
     afilter = "[1:a]" + ",".join(achain) + "[a]"
 
     cmd = [ffmpeg_bin, "-y", "-i", video_path, "-i", audio_path]
