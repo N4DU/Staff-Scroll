@@ -47,6 +47,16 @@ import traceback
 
 ISSUES_URL = "https://github.com/N4DU/Staff-Scroll/issues"
 
+# En Windows, si stdout no acepta UTF-8 (salida redirigida a archivo, consolas
+# con code page cp1252/cp437), imprimir █✓♪ lanzaría UnicodeEncodeError y
+# tumbaría el programa. Con errors="replace" el carácter no representable se
+# imprime como "?" y todo sigue andando.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
 # ─── soporte ANSI ─────────────────────────────────────────────────────────────
 
 def _is_tty():
@@ -143,6 +153,19 @@ class _Console:
             print(self._final_line(phase, error), flush=True)
             if error is not None:
                 self._print_error(phase, error)
+            if self._live:
+                self._draw_live(force=True)
+
+    def cancel(self, phase, note=""):
+        """Cierre neutro (ni ✓ ni ✗): la fase se abandonó a propósito."""
+        with self._lock:
+            if phase in self._active:
+                self._active.remove(phase)
+            self._clear_live()
+            c = self.c
+            extra = f" — {note}" if note else ""
+            print(self._fit(f"  {c.dim}◌ {phase.label} — cancelado{extra}{c.off}",
+                            _term_width() + len(c.dim) + len(c.off)), flush=True)
             if self._live:
                 self._draw_live(force=True)
 
@@ -268,6 +291,14 @@ class Phase:
             a, b = self.span
             msg = self.label + (f" — {self.detail}" if self.detail else "") + "…"
             self._progress.web_cb(int(round(a + self.frac * (b - a))), msg)
+
+    def cancel(self, note=""):
+        """Abandona la fase a propósito (sin ✓ ni ✗). Útil cuando el trabajo
+        de la fase se descarta — p. ej. un render que se reemplaza por otro."""
+        if self._finished:
+            return
+        self._finished = True
+        CONSOLE.cancel(self, note)
 
     def __enter__(self):
         CONSOLE.start(self)
