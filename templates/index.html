@@ -728,6 +728,7 @@ body {
               <input type="number" id="optResW" class="text-input" min="320" max="3840" step="2" value="1920"> &times;
               <input type="number" id="optResH" class="text-input" min="240" max="2160" step="2" value="1080"> px
             </div>
+            <div class="opt-desc" style="margin-top:8px">&#9432; A mayor resoluci&oacute;n, m&aacute;s tarda el render: 4K procesa ~11&times; m&aacute;s p&iacute;xeles que la autom&aacute;tica. Si el video va a un monitor com&uacute;n, la autom&aacute;tica o Full HD son ideales.</div>
           </div>
         </div>
 
@@ -1077,8 +1078,11 @@ function chosenResolution() {
     const w = parseInt(optResW.value), h = parseInt(optResH.value);
     return (w >= 320 && h >= 240) ? { w, h } : null;
   }
-  const [w, h] = v.split("x").map(Number);
-  return { w, h };
+  // presets: exigir "AnchoxAlto" válido; cualquier otra cosa (valor viejo
+  // guardado en localStorage, select sin selección) equivale a "auto"
+  const m = /^(\d{3,4})x(\d{3,4})$/.exec(v || "");
+  if (!m) return null;
+  return { w: +m[1], h: +m[2] };
 }
 
 // ── vista previa animada de la línea de tiempo ───────────────────────────────
@@ -1129,11 +1133,18 @@ function gatherSettings() {
     countIn: parseInt(optCountIn.value), frac: parseInt(optFrac.value),
     phMode: phMode(), phColor: optPhColor.value,
     phAlpha: parseInt(optPhAlpha.value), phWidth: parseInt(optPhWidth.value),
-    resPreset: optResPreset.value, resW: parseInt(optResW.value) || 1920,
-    resH: parseInt(optResH.value) || 1080,
+    resPreset: optResPreset.value,
+    resW: Math.min(3840, Math.max(320, parseInt(optResW.value) || 1920)),
+    resH: Math.min(2160, Math.max(240, parseInt(optResH.value) || 1080)),
   };
 }
 function applySettings(s) {
+  // blindaje contra localStorage corrupto o de versiones viejas: cualquier
+  // campo nulo/no numérico vuelve al valor de fábrica
+  for (const k of Object.keys(FACTORY)) {
+    if (s[k] == null) s[k] = FACTORY[k];
+    if (typeof FACTORY[k] === "number" && !Number.isFinite(+s[k])) s[k] = FACTORY[k];
+  }
   optHeader.checked = !!s.header;
   optPanel.classList.toggle("no-header", !s.header);
   optSongName.value = s.songName || "";
@@ -1148,8 +1159,11 @@ function applySettings(s) {
   optPhAlpha.value = s.phAlpha; optPhAlphaVal.textContent = s.phAlpha + " %";
   optPhWidth.value = s.phWidth; optPhWidthVal.textContent = s.phWidth;
   optResPreset.value = s.resPreset || "auto";
+  // si el valor guardado ya no existe entre las opciones, volver a "auto"
+  if (optResPreset.value !== (s.resPreset || "auto")) optResPreset.value = "auto";
+  if (!optResPreset.value) optResPreset.value = "auto";
   optResW.value = s.resW; optResH.value = s.resH;
-  resCustomRow.classList.toggle("visible", s.resPreset === "custom");
+  resCustomRow.classList.toggle("visible", optResPreset.value === "custom");
 }
 (function loadDefaults() {
   let stored = null;
@@ -1458,7 +1472,7 @@ function openEditor(jobId) {
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
     edS = 0; edA = 0; edCursor = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
-    edPulseFixes = {}; edPulseDrag = null;
+    edPulseFixes = {}; edPulseDrag = null; edDrag = null; edSheetDrag = null;
     edSel = null; edEditSel = false; edEditOrig = null; edUnlocked = false;
     ed.unlock.style.display = "none"; ed.unlock.innerHTML = "🔓";
     ed.unlock.classList.remove("danger");
@@ -1495,6 +1509,12 @@ function closeEditor() {
   document.body.style.overflow = "";
   edAudio.pause();
   if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
+  // soltar cualquier arrastre en curso: un mouseup posterior no debe tocar
+  // el estado del editor ya cerrado (ni contaminar el próximo trabajo)
+  edDrag = edPulseDrag = edSheetDrag = null;
+  edPrePlay = null;
+  ed.tracks.classList.remove("dragging");
+  ed.sheet.classList.remove("panning");
   edPageImgs = {};
 }
 
@@ -1556,7 +1576,9 @@ function prerenderPages() {
   const availW = Math.max(1, Math.floor(wrap.clientWidth));
   const availH = Math.max(1, Math.floor(wrap.clientHeight));
   const dpr = window.devicePixelRatio || 1;
-  const areaKey = availW + "x" + availH + "x" + dpr;
+  // el modo "sheet-max" recorta otra banda de la hoja: forma parte de la clave
+  const areaKey = availW + "x" + availH + "x" + dpr +
+                  (ed.el.classList.contains("sheet-max") ? "|max" : "");
   if (areaKey === edFitKey) return;
   edFitKey = areaKey;
   edPageBitmaps = {};
@@ -1820,7 +1842,17 @@ function savePulseEdit() {
 }
 function cancelPulseEdit() {
   if (!edEditSel || !edSel) return;
-  if (edEditOrig !== null) edData.measures[edSel.mi].hx[edSel.k][1] = edEditOrig;
+  if (edEditOrig !== null) {
+    const m = edData.measures[edSel.mi];
+    m.hx[edSel.k][1] = edEditOrig;
+    if (m.pid) {                       // deshacer también en las repeticiones
+      for (const mm of edData.measures) {
+        if (mm !== m && mm.pid === m.pid && mm.hx && mm.hx[edSel.k]) {
+          mm.hx[edSel.k][1] = edEditOrig;
+        }
+      }
+    }
+  }
   edEditSel = false; edEditOrig = null;
   drawSheet();
 }
@@ -1884,7 +1916,7 @@ ed.sheet.addEventListener("mousedown", e => {
     edSel = null;
     drawSheet();
   }
-  if (edSheetZoom <= 1.001) return;
+  if (edSheetZoom <= 1.001) { e.preventDefault(); return; }
   edSheetDrag = { x: e.clientX, y: e.clientY, px: edSheetPanX, py: edSheetPanY };
   ed.sheet.classList.add("panning");
   e.preventDefault();
@@ -1908,9 +1940,20 @@ window.addEventListener("mousemove", e => {
     const rect = ed.sheet.getBoundingClientRect();
     const xf = Math.min(edPulseDrag.hi, Math.max(edPulseDrag.lo,
       (e.clientX - rect.left - L.ox) / Math.max(1e-6, L.pw)));
-    edPulseDrag.m.hx[edPulseDrag.k][1] = Math.round(xf * 1e4) / 1e4;
+    const v = Math.round(xf * 1e4) / 1e4;
+    edPulseDrag.m.hx[edPulseDrag.k][1] = v;
+    // con repeticiones, el mismo compás FÍSICO aparece varias veces en la
+    // línea de tiempo pero comparte los pulsos: espejar la corrección
+    if (edPulseDrag.m.pid) {
+      for (const mm of edData.measures) {
+        if (mm !== edPulseDrag.m && mm.pid === edPulseDrag.m.pid &&
+            mm.hx && mm.hx[edPulseDrag.k]) {
+          mm.hx[edPulseDrag.k][1] = v;
+        }
+      }
+    }
     if (edPulseDrag.record) {   // 🔓: se registra al soltar cada movimiento
-      edPulseFixes[edPulseDrag.mi + "|" + edPulseDrag.k] = edPulseDrag.m.hx[edPulseDrag.k][1];
+      edPulseFixes[edPulseDrag.mi + "|" + edPulseDrag.k] = v;
     }
     drawSheet();
     return;
@@ -1965,7 +2008,9 @@ function resizeTracks() {
   const dpr = window.devicePixelRatio || 1;
   const w = ed.tracks.clientWidth, h = ed.tracks.clientHeight;
   const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
-  if (ed.tracks.width !== bw) { ed.tracks.width = bw; ed.tracks.height = bh; edTracksKey = ""; }
+  if (ed.tracks.width !== bw || ed.tracks.height !== bh) {
+    ed.tracks.width = bw; ed.tracks.height = bh; edTracksKey = "";
+  }
 }
 
 // bitmap estático de las tiras (onda + grilla), sólo se rehace al cambiar
@@ -2148,20 +2193,22 @@ function updateAll() {
 }
 
 // ── reproducción ─────────────────────────────────────────────────────────────
-// Si la línea blanca está ANTES de que exista el audio (p. ej. sobre el
-// conteo previo, con la partitura arrancando antes que la canción), el
-// <audio> no puede ir a tiempos negativos: se avanza el cursor por reloj
-// (edPrePlay) en silencio y el audio arranca solo al llegar a su comienzo.
+// Fuera del rango del audio (antes de que empiece la canción — conteo — o
+// después de que termine, si la partitura es más larga), el <audio> no puede
+// posicionarse: el cursor avanza por RELOJ en silencio (edPrePlay) y el audio
+// toma o suelta el mando automáticamente al cruzar sus bordes.
 let edPrePlay = null;             // {t0: performance.now(), sig0}
 const isPlaying = () => edPrePlay !== null || !edAudio.paused;
 function tick() {
   if (edPrePlay) {
     edCursor = edPrePlay.sig0 + (performance.now() - edPrePlay.t0) / 1000;
-    if (edCursor >= edA) {
+    const end = edA + edData.audio.duration;
+    if (edCursor >= sigBounds()[1] - 0.02) { pauseAll(); edRAF = null; return; }
+    if (edCursor >= edA && edCursor < end - 0.15) {
       edPrePlay = null;
       edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
-      edAudio.play().catch(() => {});
-    }
+      edAudio.play().catch(() => pauseAll());   // si el audio no arranca, no
+    }                                           // dejar el botón en "Pausar"
     updateAll();
     edRAF = requestAnimationFrame(tick);
     return;
@@ -2176,9 +2223,10 @@ function playFromSig(sig) {
   const [lo, hi] = sigBounds();
   edCursor = Math.min(Math.max(sig, lo), hi);
   ed.play.innerHTML = "&#10074;&#10074; Pausar";
-  if (edCursor < edA) {
+  const end = edA + edData.audio.duration;
+  if (edCursor < edA || edCursor >= end - 0.15) {
+    // fuera del audio: reproducir "en silencio" por reloj
     edAudio.pause();
-    edAudio.currentTime = 0;
     edPrePlay = { t0: performance.now(), sig0: edCursor };
     if (!edRAF) edRAF = requestAnimationFrame(tick);
     return;
@@ -2194,7 +2242,16 @@ function pauseAll() {
   ed.play.innerHTML = "&#9654; Reproducir";
   updateAll();
 }
-edAudio.addEventListener("ended", pauseAll);
+// al morir el audio, si la partitura sigue (es más larga que la canción),
+// el reloj continúa el recorrido hasta el final de la unión
+edAudio.addEventListener("ended", () => {
+  if (curSig() < sigBounds()[1] - 0.25) {
+    edPrePlay = { t0: performance.now(), sig0: curSig() };
+    if (!edRAF) edRAF = requestAnimationFrame(tick);
+  } else {
+    pauseAll();
+  }
+});
 // ▶ reproduce/pausa desde donde está la línea blanca (sin moverla al pausar)
 ed.play.addEventListener("click", () => {
   if (isPlaying()) pauseAll();
@@ -2209,7 +2266,9 @@ ed.toStart.addEventListener("click", () => {
   else { seekToSig(lo, false); updateAll(); }
 });
 ed.testEnd.addEventListener("click", () => {
-  playFromSig(Math.max(edS + edData.music_duration - 8, edA));
+  // el final de la PARTITURA (aunque quede después del final de la canción:
+  // el reloj silencioso cubre ese tramo)
+  playFromSig(edS + edData.music_duration - 8);
 });
 
 function seekToSig(sig, magnet) {
@@ -2248,6 +2307,7 @@ window.addEventListener("mousemove", e => {
   if (!edDrag.moved) return;
   const dSec = dx / edZoom;
   if (edDrag.kind === "cursor") {
+    edFollow = true;          // mover la línea blanca retoma el seguimiento
     seekToSig(sigOfX(x), true);
   } else if (edDrag.kind === "score") {
     const cand = edDrag.S0 + dSec;
@@ -2334,6 +2394,10 @@ document.addEventListener("keydown", e => {
 
 // ── finalizar ────────────────────────────────────────────────────────────────
 async function submitFinalize(body) {
+  // una corrección de pulso a medias (✏ sin ✓) se guarda sola: el usuario lo
+  // movió a propósito — descartarla en silencio sería perder su trabajo
+  if (edEditSel) savePulseEdit();
+  if (body.pulse_fixes) body.pulse_fixes = pulseFixList();
   pauseAll();
   ed.finalize.disabled = ed.skip.disabled = true;
   try {

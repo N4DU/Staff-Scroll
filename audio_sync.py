@@ -174,6 +174,10 @@ def build_mux_command(ffmpeg_bin, video_path, audio_path, out_path,
         achain.append(f"adelay={delay_ms}:all=1")
     if fade_out > 0 and total > fade_out:
         achain.append(f"afade=t=out:st={max(0.0, total - fade_out):.4f}:d={fade_out:.3f}")
+    # apad: si la canción termina antes que el video, se rellena con silencio
+    # (el -t final lo recorta). Sin esto las pistas quedaban de duraciones
+    # distintas y algunos reproductores cortan el video al morir el audio.
+    achain.append("apad")
     afilter = "[1:a]" + ",".join(achain) + "[a]"
 
     cmd = [ffmpeg_bin, "-y", "-i", video_path, "-i", audio_path]
