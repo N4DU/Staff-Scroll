@@ -56,7 +56,7 @@ def find_musescore():
         if path and os.path.isfile(path):
             return path
     raise RuntimeError(
-        "No se encontró MuseScore. Instalá MuseScore 3 o 4 desde https://musescore.org"
+        "No se encontró MuseScore. Instala MuseScore 3 o 4 desde https://musescore.org"
     )
 
 def _run_mscore(mscore_bin, args, workdir=None):
@@ -211,7 +211,7 @@ def process_mscz_files(mscz_paths, workdir, progress=None):
             if len(svgs) != len(pngs):
                 raise RuntimeError(
                     f"El archivo {i} rinde {len(pngs)} hojas en PNG pero "
-                    f"{len(svgs)} en SVG — reportalo con el archivo en cuestión.")
+                    f"{len(svgs)} en SVG — repórtalo adjuntando el archivo en cuestión.")
 
             # renumerar cada hoja como página canónica del video
             for s, (png_p, svg_p) in enumerate(zip(pngs, svgs), start=1):

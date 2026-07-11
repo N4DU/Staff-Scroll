@@ -604,8 +604,8 @@ class ScoreEngine:
                 raise ValueError(
                     f"El archivo {s} tiene {full['n_measures']} compases pero "
                     f"sus {len(pages)} hojas suman {sum(counts)} — no se puede "
-                    "repartir la música entre las hojas con seguridad. Probá "
-                    "dividir ese archivo en un .mscz por hoja.")
+                    "repartir la música entre las hojas con seguridad. Prueba "
+                    "dividir ese archivo en un .mscz por hoja y vuelve a subirlo.")
             starts = [0]
             for c in counts:
                 starts.append(starts[-1] + c)
