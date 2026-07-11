@@ -292,6 +292,9 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .profile-chip .profile-apply:hover { color: var(--orange); }
+.profile-chip.active { border-color: var(--orange); background: rgba(255,165,0,0.13); }
+.profile-chip.active .profile-apply { color: var(--orange); font-weight: 600; }
+.profile-chip.active .profile-apply::before { content: "✓ "; }
 .profile-chip .profile-del {
   background: rgba(0,0,0,0.25); border: none; border-left: 1px solid var(--border);
   color: #8a93a8; cursor: pointer; padding: 0 8px; font-size: 0.8rem;
@@ -762,7 +765,7 @@ body {
           </div>
           <div class="opt-row">
             <div class="opt-label">Perfiles de configuraci&oacute;n</div>
-            <div class="opt-desc">Guarda configuraciones completas con nombre y apl&iacute;calas con un clic &mdash; ideal cuando distintas personas o proyectos usan el programa con preferencias diferentes, sin modificar los valores predeterminados.</div>
+            <div class="opt-desc">Guarda la configuraci&oacute;n actual con un nombre y apl&iacute;cala con un clic. El perfil activo se muestra resaltado.</div>
             <div class="btn-row">
               <input type="text" id="profileName" class="text-input" maxlength="40"
                      placeholder="Nombre del perfil (p. ej. &laquo;Ensayo TV del sal&oacute;n&raquo;)" style="flex:1; min-width:180px">
@@ -1227,21 +1230,29 @@ function storeProfiles(o) {
   catch (e) { return false; }
 }
 let profDelArm = null;   // nombre "armado" para confirmar el borrado
+// firma canónica de una configuración → detectar qué perfil está activo
+// (coincide con la configuración actual) sin llevar estado aparte
+function settingsSig(s) {
+  s = { ...FACTORY, ...s };
+  return JSON.stringify(Object.keys(FACTORY).map(k => s[k]));
+}
 function renderProfiles() {
   const o = loadProfiles();
   const names = Object.keys(o).sort((a, b) => a.localeCompare(b, "es"));
   profileList.innerHTML = "";
   profileList.style.display = names.length ? "" : "none";
+  const curSig = settingsSig(gatherSettings());
   for (const nm of names) {
     const chip = document.createElement("span");
     chip.className = "profile-chip";
+    if (settingsSig(o[nm]) === curSig) chip.classList.add("active");
     const apply = document.createElement("button");
     apply.type = "button"; apply.className = "profile-apply";
     apply.textContent = nm;
     apply.title = "Aplicar este perfil (cambia toda la configuración)";
     apply.addEventListener("click", () => {
       applySettings({ ...FACTORY, ...o[nm] });
-      profileMsg.textContent = `✓ Perfil «${nm}» aplicado.`;
+      profileMsg.textContent = "";
       profDelArm = null; renderProfiles();
     });
     const del = document.createElement("button");
@@ -1278,11 +1289,26 @@ document.getElementById("btnSaveProfile").addEventListener("click", () => {
                : `✓ Perfil «${nm}» guardado.`)
     : "No se pudo guardar en este navegador.";
   profileName.value = "";
+  updateProfileBtn();
   profDelArm = null;
   renderProfiles();
 });
 profileName.addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("btnSaveProfile").click();
+});
+// el botón avisa solo si el nombre ya existe: guardar de nuevo = actualizar
+function updateProfileBtn() {
+  const exists = profileName.value.trim() in loadProfiles();
+  document.getElementById("btnSaveProfile").innerHTML =
+    exists ? "&#10227; Actualizar perfil" : "&#43; Guardar perfil";
+}
+profileName.addEventListener("input", updateProfileBtn);
+// cualquier cambio en la configuración re-evalúa qué perfil queda activo
+optPanel.addEventListener("input", e => {
+  if (e.target !== profileName) renderProfiles();
+});
+optPanel.addEventListener("change", e => {
+  if (e.target !== profileName) renderProfiles();
 });
 renderProfiles();
 
