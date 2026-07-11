@@ -791,7 +791,8 @@ body {
   <!-- dos tiras de tiempo: PARTITURA arriba, CANCIÓN abajo -->
   <div class="ed-bottom">
     <div class="ed-transport">
-      <button class="ed-btn primary" id="edPlay" type="button">&#9654; Probar desde el comp&aacute;s 1</button>
+      <button class="ed-btn" id="edToStart" type="button" title="Ir al inicio (lo que empiece primero: partitura o canci&oacute;n)">&#9198;</button>
+      <button class="ed-btn primary" id="edPlay" type="button">&#9654; Reproducir</button>
       <button class="ed-btn" id="edTestEnd" type="button" title="Si al final sigue a tiempo, qued&oacute; perfecto">Probar el final</button>
       <span class="ed-time" id="edTime">0:00.000</span>
       <span class="ed-measure-ind" id="edMeasureInd"></span>
@@ -809,7 +810,8 @@ body {
     <div class="ed-wave-hint">
       Arrastr&aacute; la tira de la <b style="color:var(--orange)">partitura</b> (arriba) o de la <b style="color:#5ac8ff">canci&oacute;n</b> (abajo) para alinearlas &middot;
       arrastr&aacute; la <b>l&iacute;nea blanca</b> para moverla (se imanta a los tiempos) &middot; click = mover el cursor &middot; rueda = zoom &middot;
-      <kbd>Espacio</kbd> reproducir/pausar &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10ms (<kbd>Shift</kbd> = 1ms) &middot; <kbd>D</kbd> diagn&oacute;stico
+      <kbd>Espacio</kbd> reproducir/pausar desde la l&iacute;nea blanca &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10ms (<kbd>Shift</kbd> = 1ms) &middot;
+      <kbd>P</kbd> ver los pulsos en la hoja (arrastralos si alguno qued&oacute; mal) &middot; <kbd>D</kbd> diagn&oacute;stico
     </div>
   </div>
 
@@ -1302,6 +1304,7 @@ const ed = {
   nextPage: document.getElementById("edNextPage"),
   tracks:   document.getElementById("edTracks"),
   play:     document.getElementById("edPlay"),
+  toStart:  document.getElementById("edToStart"),
   testEnd:  document.getElementById("edTestEnd"),
   time:     document.getElementById("edTime"),
   mInd:     document.getElementById("edMeasureInd"),
@@ -1331,6 +1334,9 @@ let edRAF = null;
 let edCurPage = 1;
 let edFollow = true;
 let edDiag = false;
+let edPulses = false;             // [P] mostrar los pulsos guardados en la hoja
+let edPulseFixes = {};            // "índiceCompás|pulso" → x corregida (fracción)
+let edPulseDrag = null;           // arrastre de un pulso en curso
 
 // zoom/pan de la HOJA (independiente del zoom de las tiras)
 let edSheetZoom = 1, edSheetPanX = 0, edSheetPanY = 0;
@@ -1389,6 +1395,8 @@ function openEditor(jobId) {
   fetch(`/editor_data/${jobId}`).then(r => r.json()).then(d => {
     edData = d;
     edS = 0; edA = 0; edCursor = 0; edCurPage = d.pages[0]; edFollow = true; edDiag = false;
+    edPulses = false; edPulseFixes = {}; edPulseDrag = null;
+    edPrePlay = null; ed.play.innerHTML = "&#9654; Reproducir";
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     buildBeatGrid();
@@ -1593,6 +1601,26 @@ function drawSheet() {
     });
   }
 
+  if (edPulses) {
+    // [P] pulsos guardados: dónde caerá la línea amarilla en cada tiempo.
+    // Cada marcador se puede arrastrar horizontalmente para corregirlo; los
+    // corregidos se pintan violeta y viajan al video final al generar.
+    edData.measures.forEach((mm, i) => {
+      if (mm.page !== edCurPage || !mm.hx) return;
+      for (let k = 0; k < mm.hx.length; k++) {
+        const xf = mm.hx[k][1];
+        const fixed = (i + "|" + k) in edPulseFixes;
+        const grabbed = edPulseDrag && edPulseDrag.mi === i && edPulseDrag.k === k;
+        const col = fixed ? "200,80,255" : "0,170,90";
+        ctx.strokeStyle = `rgba(${col},${grabbed ? 0.95 : 0.55})`;
+        ctx.lineWidth = grabbed ? 2 : 1.4;
+        ctx.beginPath(); ctx.moveTo(px(xf), py(mm.y0)); ctx.lineTo(px(xf), py(mm.y1)); ctx.stroke();
+        ctx.fillStyle = `rgba(${col},${grabbed ? 1 : 0.85})`;
+        ctx.beginPath(); ctx.arc(px(xf), py(mm.y0), grabbed ? 6 : 4.5, 0, 7); ctx.fill();
+      }
+    });
+  }
+
   const tau = curMusic();
   const m = measureAt(tau);
   if (!m || m.page !== edCurPage) return;
@@ -1690,14 +1718,63 @@ ed.zScoreIn.addEventListener("click", () => { const L = edSheetLayout; zoomSheet
 ed.zScoreOut.addEventListener("click", () => { const L = edSheetLayout; zoomSheet(1 / 1.3, L ? L.cvW / 2 : null, L ? L.cvH / 2 : null); });
 ed.zScoreRst.addEventListener("click", () => { clearTimeout(edSharpTimer); edSheetZoom = 1; edSheetPanX = edSheetPanY = 0; edSheetSharp = false; ed.sheet.classList.remove("zoomed"); edSheetKey = ""; drawSheet(); });
 
-// pan de la hoja arrastrando (sólo cuando hay zoom)
+// ── corrección de pulsos [P]: buscar un marcador cerca del mouse ─────────────
+function pulseHitAt(x, y) {
+  const L = edSheetLayout;
+  if (!edPulses || !L) return null;
+  let best = null, bestD = 8;                     // tolerancia: 8 px
+  edData.measures.forEach((mm, i) => {
+    if (mm.page !== edCurPage || !mm.hx) return;
+    const yTop = L.oy + ((mm.y0 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph;
+    const yBot = L.oy + ((mm.y1 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph;
+    if (y < yTop - 10 || y > yBot) return;
+    for (let k = 0; k < mm.hx.length; k++) {
+      const d = Math.abs(x - (L.ox + mm.hx[k][1] * L.pw));
+      if (d < bestD) { bestD = d; best = { mi: i, k, m: mm }; }
+    }
+  });
+  return best;
+}
+
+// pan de la hoja arrastrando (con zoom) — o arrastre de un pulso (modo [P])
 ed.sheet.addEventListener("mousedown", e => {
+  const rect = ed.sheet.getBoundingClientRect();
+  const hit = pulseHitAt(e.clientX - rect.left, e.clientY - rect.top);
+  if (hit) {
+    const hx = hit.m.hx;
+    // el pulso solo puede moverse dentro de su compás y sin cruzar vecinos
+    const lo = hit.k > 0 ? hx[hit.k - 1][1] + 0.001 : hit.m.x0;
+    const hi = hit.k < hx.length - 1 ? hx[hit.k + 1][1] - 0.001 : hit.m.x1;
+    edPulseDrag = { ...hit, lo, hi };
+    e.preventDefault();
+    return;
+  }
   if (edSheetZoom <= 1.001) return;
   edSheetDrag = { x: e.clientX, y: e.clientY, px: edSheetPanX, py: edSheetPanY };
   ed.sheet.classList.add("panning");
   e.preventDefault();
 });
+ed.sheet.addEventListener("mousemove", e => {
+  // cursor de "agarrable" al pasar sobre un pulso en modo [P]
+  if (edPulses && !edPulseDrag && !edSheetDrag) {
+    const rect = ed.sheet.getBoundingClientRect();
+    ed.sheet.style.cursor =
+      pulseHitAt(e.clientX - rect.left, e.clientY - rect.top) ? "ew-resize" : "";
+  } else if (!edPulses) {
+    ed.sheet.style.cursor = "";
+  }
+});
 window.addEventListener("mousemove", e => {
+  if (edPulseDrag) {
+    const L = edSheetLayout;
+    const rect = ed.sheet.getBoundingClientRect();
+    const xf = Math.min(edPulseDrag.hi, Math.max(edPulseDrag.lo,
+      (e.clientX - rect.left - L.ox) / Math.max(1e-6, L.pw)));
+    edPulseDrag.m.hx[edPulseDrag.k][1] = Math.round(xf * 1e4) / 1e4;
+    edPulseFixes[edPulseDrag.mi + "|" + edPulseDrag.k] = edPulseDrag.m.hx[edPulseDrag.k][1];
+    drawSheet();
+    return;
+  }
   if (!edSheetDrag) return;
   edSheetPanX = edSheetDrag.px + (e.clientX - edSheetDrag.x);
   edSheetPanY = edSheetDrag.py + (e.clientY - edSheetDrag.y);
@@ -1707,6 +1784,7 @@ window.addEventListener("mousemove", e => {
   scheduleSharpen();
 });
 window.addEventListener("mouseup", () => {
+  edPulseDrag = null;
   if (edSheetDrag) { edSheetDrag = null; ed.sheet.classList.remove("panning"); }
 });
 
@@ -1877,7 +1955,24 @@ function updateAll() {
 }
 
 // ── reproducción ─────────────────────────────────────────────────────────────
+// Si la línea blanca está ANTES de que exista el audio (p. ej. sobre el
+// conteo previo, con la partitura arrancando antes que la canción), el
+// <audio> no puede ir a tiempos negativos: se avanza el cursor por reloj
+// (edPrePlay) en silencio y el audio arranca solo al llegar a su comienzo.
+let edPrePlay = null;             // {t0: performance.now(), sig0}
+const isPlaying = () => edPrePlay !== null || !edAudio.paused;
 function tick() {
+  if (edPrePlay) {
+    edCursor = edPrePlay.sig0 + (performance.now() - edPrePlay.t0) / 1000;
+    if (edCursor >= edA) {
+      edPrePlay = null;
+      edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
+      edAudio.play().catch(() => {});
+    }
+    updateAll();
+    edRAF = requestAnimationFrame(tick);
+    return;
+  }
   if (edAudio.paused) { edRAF = null; return; }
   edCursor = edAudio.currentTime + edA;   // reproduciendo, el audio manda
   updateAll();
@@ -1887,21 +1982,38 @@ function playFromSig(sig) {
   edFollow = true;
   const [lo, hi] = sigBounds();
   edCursor = Math.min(Math.max(sig, lo), hi);
+  ed.play.innerHTML = "&#10074;&#10074; Pausar";
+  if (edCursor < edA) {
+    edAudio.pause();
+    edAudio.currentTime = 0;
+    edPrePlay = { t0: performance.now(), sig0: edCursor };
+    if (!edRAF) edRAF = requestAnimationFrame(tick);
+    return;
+  }
   edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
   edAudio.play().then(() => {
-    ed.play.innerHTML = "&#10074;&#10074; Pausar";
     if (!edRAF) edRAF = requestAnimationFrame(tick);
-  }).catch(() => {});
+  }).catch(() => { ed.play.innerHTML = "&#9654; Reproducir"; });
 }
 function pauseAll() {
+  edPrePlay = null;
   edAudio.pause();
-  ed.play.innerHTML = "&#9654; Probar desde el comp&aacute;s 1";
+  ed.play.innerHTML = "&#9654; Reproducir";
   updateAll();
 }
 edAudio.addEventListener("ended", pauseAll);
+// ▶ reproduce/pausa desde donde está la línea blanca (sin moverla al pausar)
 ed.play.addEventListener("click", () => {
-  if (edAudio.paused) playFromSig(Math.max(edS - 1.5, edA));
-  else pauseAll();
+  if (isPlaying()) pauseAll();
+  else playFromSig(curSig());
+});
+// ⏮ vuelve al inicio de todo (partitura con su conteo o canción, lo primero);
+// si estaba sonando, sigue sonando desde ahí
+ed.toStart.addEventListener("click", () => {
+  const lo = sigBounds()[0];
+  edFollow = true;
+  if (isPlaying()) playFromSig(lo);
+  else { seekToSig(lo, false); updateAll(); }
 });
 ed.testEnd.addEventListener("click", () => {
   playFromSig(Math.max(edS + edData.music_duration - 8, edA));
@@ -1913,6 +2025,12 @@ function seekToSig(sig, magnet) {
   edCursor = Math.min(Math.max(sig, lo), hi);
   // el audio sólo puede posicionarse dentro de su propio rango
   edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
+  if (edPrePlay) {
+    // reproduciendo en la zona previa al audio: re-basar el reloj (o pasar
+    // el mando al audio si el salto cayó dentro de su rango)
+    if (edCursor >= edA) { edPrePlay = null; edAudio.play().catch(() => {}); }
+    else edPrePlay = { t0: performance.now(), sig0: edCursor };
+  }
 }
 
 // ── interacción con las tiras ────────────────────────────────────────────────
@@ -2003,6 +2121,11 @@ document.addEventListener("keydown", e => {
     updateAll();
   }
   else if (e.key === "d" || e.key === "D") { edDiag = !edDiag; edSheetKey = ""; drawSheet(); }
+  else if (e.key === "p" || e.key === "P") {
+    edPulses = !edPulses;
+    if (!edPulses) { edPulseDrag = null; ed.sheet.style.cursor = ""; }
+    drawSheet();
+  }
   else if (e.key === "f" || e.key === "F") { ed.full.click(); }
   else if (e.key === "Escape" && ed.el.classList.contains("sheet-max")) {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -2030,8 +2153,17 @@ async function submitFinalize(body) {
   setProgress(5, "Generando el video final…");
   listenProgress(currentJobId);
 }
-ed.finalize.addEventListener("click", () => submitFinalize({ offset: offset(), stretch: 1.0 }));
-ed.skip.addEventListener("click",     () => submitFinalize({ skip: true }));
+// correcciones de pulsos hechas con [P] → van al video final
+function pulseFixList() {
+  return Object.entries(edPulseFixes).map(([key, x]) => {
+    const [i, k] = key.split("|").map(Number);
+    return { i, k, x };
+  });
+}
+ed.finalize.addEventListener("click", () => submitFinalize({
+  offset: offset(), stretch: 1.0, pulse_fixes: pulseFixList() }));
+ed.skip.addEventListener("click",     () => submitFinalize({
+  skip: true, pulse_fixes: pulseFixList() }));
 
 window.addEventListener("resize", () => {
   if (edData) { edSheetKey = edTracksKey = ""; resizeTracks(); drawTracks(); drawSheet(); }

@@ -174,8 +174,15 @@ def create_app():
             # offset negativo = la partitura empieza ANTES que el audio
             offset  = max(-7200.0, min(7200.0, float(data.get("offset", 0.0))))
             stretch = max(0.5, min(2.0, float(data.get("stretch", 1.0))))
-        except (TypeError, ValueError):
+            # correcciones de pulsos hechas en el editor con [P]:
+            # {i: índice de compás en la línea de tiempo, k: pulso, x: fracción}
+            fixes = []
+            for f in (data.get("pulse_fixes") or [])[:4000]:
+                fixes.append({"i": int(f["i"]), "k": int(f["k"]),
+                              "x": min(1.0, max(0.0, float(f["x"])))})
+        except (TypeError, ValueError, KeyError):
             return jsonify({"error": "Parámetros inválidos"}), 400
+        j["pulse_fixes"] = fixes
 
         with _jobs_lock:
             if j.get("finalizing"):
@@ -438,6 +445,21 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
         if r["error"]:
             raise RuntimeError(r["error"])
 
+        # Pulsos corregidos a mano en el editor ([P]): se aplican al motor y
+        # el video se renderiza de nuevo con la línea en las posiciones
+        # corregidas. Si esta misma tanda ya se aplicó (reintento), se salta.
+        fixes = j.get("pulse_fixes") or []
+        sig = tuple(sorted((f["i"], f["k"], f["x"]) for f in fixes))
+        if fixes and sig != j.get("_fixes_applied"):
+            n_ok = _apply_pulse_fixes(j["engine"], fixes)
+            if n_ok:
+                what = "pulsos corregidos" if n_ok != 1 else "pulso corregido"
+                with progress.phase(f"Aplicando {n_ok} {what} (re-render)",
+                                    span=(10, 78)) as ph:
+                    r["path"] = _render_video_frames(
+                        j, j["engine"], lambda p: ph.update(p / 100))
+            j["_fixes_applied"] = sig
+
         if skip_audio:
             j["output"] = r["path"]
             prog(100, "¡Video listo para descargar!")
@@ -471,6 +493,25 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
         j["done"]  = True
     finally:
         j["finalizing"] = False
+
+
+def _apply_pulse_fixes(engine, fixes):
+    """Aplica al motor los pulsos corregidos a mano en el editor. Cada fix
+    mueve la posición horizontal (x) de UN pulso guardado en beat_x_map; el
+    playhead del video final la usa tal cual. Devuelve cuántos se aplicaron."""
+    n_ok = 0
+    for f in fixes:
+        i, k, x = f["i"], f["k"], f["x"]
+        if not (0 <= i < len(engine._timeline)):
+            continue
+        _t, _dur, fn, mi, _beats, _bpm = engine._timeline[i]
+        bmap = engine.beat_x_map.get(fn, [])
+        if not (0 <= mi < len(bmap)) or not bmap[mi] or not (0 <= k < len(bmap[mi])):
+            continue
+        b_pos = bmap[mi][k][0]
+        bmap[mi][k] = (b_pos, x * engine.layouts[fn]["w"])
+        n_ok += 1
+    return n_ok
 
 
 def _find_ffmpeg():

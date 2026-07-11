@@ -39,6 +39,7 @@ barras activas a la vez.
 ════════════════════════════════════════════════════════════════════════════
 """
 import os
+import shutil
 import sys
 import time
 import threading
@@ -46,19 +47,27 @@ import traceback
 
 ISSUES_URL = "https://github.com/N4DU/Staff-Scroll/issues"
 
-_BAR_W   = 26          # ancho de la barra en caracteres
-_LABEL_W = 34          # ancho reservado para el nombre del paso
-
 # ─── soporte ANSI ─────────────────────────────────────────────────────────────
 
-def _enable_ansi():
-    """Devuelve True si la consola acepta códigos ANSI (barras en vivo)."""
-    if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
-        return False
-    if os.environ.get("TERM") == "dumb":
+def _is_tty():
+    """¿Podemos reescribir la línea actual con '\\r'? (funciona en cualquier
+    terminal interactiva: CMD, PowerShell, Windows Terminal, git-bash…)"""
+    return (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+            and os.environ.get("TERM") != "dumb")
+
+
+def _enable_colors():
+    """Devuelve True si es seguro emitir colores ANSI. Solo colores: el
+    dibujado en vivo usa únicamente '\\r', que funciona en todas partes
+    (git-bash/MINGW ignora los códigos de mover el cursor y rompía las
+    barras — por eso nunca se usan)."""
+    if not _is_tty():
         return False
     if os.name == "nt":
-        # Activar el procesamiento de secuencias VT en la consola de Windows.
+        # Consolas tipo mintty (git-bash) entienden colores de por sí.
+        if os.environ.get("MSYSTEM") or os.environ.get("WT_SESSION"):
+            return True
+        # Consola clásica de Windows: activar el procesamiento VT.
         try:
             import ctypes
             k32 = ctypes.windll.kernel32
@@ -72,6 +81,14 @@ def _enable_ansi():
     return True
 
 
+def _term_width():
+    try:
+        w = shutil.get_terminal_size(fallback=(90, 24)).columns
+    except Exception:
+        w = 90
+    return max(40, min(w, 120))
+
+
 class _Ansi:
     def __init__(self, on):
         f = (lambda s: s) if on else (lambda s: "")
@@ -82,16 +99,17 @@ class _Ansi:
 # ─── renderizador de consola (compartido por todos los trabajos) ─────────────
 
 class _Console:
-    """Dibuja las barras activas en bloque, redibujando en el lugar (ANSI).
-    En consolas sin ANSI (p. ej. git-bash/MINGW) imprime líneas de avance en
-    los hitos de 25 % — sin basura de códigos de escape."""
+    """UNA línea viva que se reescribe con '\\r' (compatible con cualquier
+    terminal, incluida git-bash/MINGW, y con ventanas chicas: todo se recorta
+    al ancho real). Al terminar cada fase queda una línea permanente con ✓/✗.
+    En salidas que no son una terminal (pipes, logs) imprime hitos de 25 %."""
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._live = _enable_ansi()
-        self.c = _Ansi(self._live)
-        self._active = []        # fases visibles en el bloque en vivo
-        self._n_drawn = 0        # líneas del bloque actualmente en pantalla
+        self._live = _is_tty()
+        self.c = _Ansi(_enable_colors())
+        self._active = []        # fases en curso (puede haber más de una)
+        self._live_len = 0       # ancho visible de la línea viva actual
         self._last_draw = 0.0
 
     # — API interna que usan las fases —
@@ -100,67 +118,86 @@ class _Console:
         with self._lock:
             self._active.append(phase)
             if self._live:
-                self._redraw(force=True)
+                self._draw_live(force=True)
             else:
                 print(f"▶ {phase.label}…", flush=True)
 
     def update(self, phase):
         with self._lock:
             if self._live:
-                self._redraw()
+                self._draw_live()
             else:
                 # hito de 25 %: una línea por cuarto, sin inundar la consola
                 q = int(phase.frac * 4)
                 if q > phase._last_quarter and q < 4:
                     phase._last_quarter = q
-                    d = f"  ({phase.detail})" if phase.detail else ""
-                    print(f"   {phase.label} — {int(phase.frac * 100)}%{d}", flush=True)
+                    d = f" · {phase.detail}" if phase.detail else ""
+                    print(self._fit(f"   {phase.label} — {int(phase.frac*100)}%{d}"),
+                          flush=True)
 
     def finish(self, phase, error=None):
         with self._lock:
             if phase in self._active:
                 self._active.remove(phase)
-            line = self._final_line(phase, error)
-            if self._live:
-                self._clear_block()
-                print(line, flush=True)
-                self._redraw(force=True)
-            else:
-                print(line, flush=True)
+            self._clear_live()
+            print(self._final_line(phase, error), flush=True)
             if error is not None:
                 self._print_error(phase, error)
+            if self._live:
+                self._draw_live(force=True)
 
     def println(self, text=""):
-        """Imprime una línea permanente sin romper el bloque de barras."""
+        """Imprime una línea permanente sin romper la línea viva."""
         with self._lock:
+            self._clear_live()
+            print(text, flush=True)
             if self._live:
-                self._clear_block()
-                print(text, flush=True)
-                self._redraw(force=True)
-            else:
-                print(text, flush=True)
+                self._draw_live(force=True)
 
     # — dibujo —
 
-    def _bar(self, frac):
-        filled = int(round(frac * _BAR_W))
-        return "█" * filled + "─" * (_BAR_W - filled)
+    @staticmethod
+    def _bar(frac, width):
+        filled = int(round(frac * width))
+        return "█" * filled + "░" * (width - filled)
 
-    def _line(self, ph):
+    @staticmethod
+    def _fit(text, width=None):
+        width = width or _term_width()
+        return text if len(text) <= width - 1 else text[:width - 2] + "…"
+
+    def _live_line(self, ph, width):
+        # "  Nombre del paso  ████░░░░░░  45% · detalle"  — recortado al ancho
         c = self.c
+        extra = f"  (+{len(self._active) - 1} en curso)" if len(self._active) > 1 else ""
+        bar_w = 18 if width >= 84 else (12 if width >= 64 else 8)
         pct = f"{int(ph.frac * 100):3d}%"
-        detail = f"  {c.dim}{ph.detail}{c.off}" if ph.detail else ""
-        return (f"  {ph.label[:_LABEL_W].ljust(_LABEL_W)} "
-                f"{c.cyan}{self._bar(ph.frac)}{c.off} {pct}{detail}")
+        fixed = 2 + bar_w + 2 + len(pct) + len(extra)      # todo menos label/detalle
+        lab_w = max(8, width - 1 - fixed - 12)
+        label = ph.label if len(ph.label) <= lab_w else ph.label[:lab_w - 1] + "…"
+        room = width - 1 - fixed - len(label) - 2
+        detail = ""
+        if ph.detail and room > 4:
+            detail = f" · {ph.detail}"
+            if len(detail) > room:
+                detail = detail[:room - 1] + "…"
+        plain = f"  {label} {self._bar(ph.frac, bar_w)} {pct}{detail}{extra}"
+        colored = (f"  {label} {c.cyan}{self._bar(ph.frac, bar_w)}{c.off} "
+                   f"{pct}{c.dim}{detail}{extra}{c.off}")
+        return plain, colored
 
     def _final_line(self, ph, error):
         c = self.c
         secs = f"{ph.elapsed:.1f}s"
         if error is None:
-            return (f"  {c.green}✓{c.off} {ph.label[:_LABEL_W].ljust(_LABEL_W)} "
-                    f"{c.green}{self._bar(1.0)}{c.off} 100%  {c.dim}{secs}{c.off}")
-        return (f"  {c.red}✗ {ph.label} — FALLÓ a los {secs} "
-                f"({int(ph.frac * 100)}%){c.off}")
+            bar = f" {self._bar(1.0, 10)} " if _term_width() >= 64 else " — "
+            return self._fit(f"  {c.green}✓ {ph.label}{c.off}{c.green}{bar}{c.off}"
+                             f"{c.dim}{secs}{c.off}",
+                             _term_width() + (len(c.green) * 3 + len(c.off) * 3
+                                              + len(c.dim)))
+        return self._fit(f"  {c.red}✗ {ph.label} — FALLÓ a los {secs} "
+                         f"({int(ph.frac * 100)}%){c.off}",
+                         _term_width() + len(c.red) + len(c.off))
 
     def _print_error(self, ph, error):
         c = self.c
@@ -174,22 +211,28 @@ class _Console:
         print(f"    {c.dim}Si el problema persiste, reportalo (copiando estas "
               f"líneas) en:{c.off} {ISSUES_URL}", flush=True)
 
-    def _clear_block(self):
-        if self._n_drawn:
-            # subir al comienzo del bloque y borrar hasta el final de pantalla
-            sys.stdout.write(f"\x1b[{self._n_drawn}F\x1b[0J")
-            self._n_drawn = 0
+    def _clear_live(self):
+        if self._live and self._live_len:
+            sys.stdout.write("\r" + " " * self._live_len + "\r")
+            sys.stdout.flush()
+            self._live_len = 0
 
-    def _redraw(self, force=False):
+    def _draw_live(self, force=False):
+        if not self._active:
+            self._clear_live()
+            return
         now = time.monotonic()
-        if not force and now - self._last_draw < 0.08:   # ~12 fps máx.
+        if not force and now - self._last_draw < 0.08:   # ~12 dibujos/s máx.
             return
         self._last_draw = now
-        self._clear_block()
-        for ph in self._active:
-            sys.stdout.write(self._line(ph) + "\n")
-        self._n_drawn = len(self._active)
+        # se muestra la fase actualizada más recientemente; si hay más de una
+        # en curso, la línea lo indica con "(+N en curso)"
+        ph = max(self._active, key=lambda p: p._last_update)
+        plain, colored = self._live_line(ph, _term_width())
+        pad = max(0, self._live_len - len(plain))
+        sys.stdout.write("\r" + colored + " " * pad + "\b" * pad)
         sys.stdout.flush()
+        self._live_len = len(plain)
 
 
 CONSOLE = _Console()
@@ -207,6 +250,7 @@ class Phase:
         self.frac = 0.0
         self.detail = ""
         self._t0 = time.monotonic()
+        self._last_update = self._t0
         self._last_quarter = 0
         self._finished = False
 
@@ -218,6 +262,7 @@ class Phase:
         self.frac = min(1.0, max(0.0, float(frac)))
         if detail:
             self.detail = str(detail)
+        self._last_update = time.monotonic()
         CONSOLE.update(self)
         if self.span and self._progress.web_cb:
             a, b = self.span
