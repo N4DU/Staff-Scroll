@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import uuid
 import shutil
 import threading
@@ -145,7 +146,14 @@ def create_app():
             if not j.get("_cleanup"):        # un solo hilo de limpieza por job
                 j["_cleanup"] = True
                 threading.Thread(target=_cleanup, daemon=True).start()
-        return send_file(out, as_attachment=True, download_name="scrolling_score.mp4", mimetype="video/mp4")
+        # el archivo se llama como la canción ("That Band.mp4"), no
+        # "scrolling_score.mp4"; solo se quitan caracteres inválidos en
+        # nombres de archivo (Windows es el más estricto)
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", j.get("song_name") or "").strip()
+        if not name or name == "Scrolling Score":
+            name = "scrolling_score"
+        return send_file(out, as_attachment=True, download_name=f"{name}.mp4",
+                         mimetype="video/mp4")
 
     # ── rutas del editor de sincronización ───────────────────────────────────
 
@@ -303,6 +311,7 @@ def _run_job(job_id, options):
             engine = build_engine(engine_cfg, phase=ph)
 
         j["engine"]         = engine
+        j["song_name"]      = getattr(engine, "song_name", "") or ""
         j["fps"]            = engine_cfg.get("fps", 30)
         j["png_dir"]        = engine_cfg["png_dir"]
         j["lead_in"]        = getattr(engine, "lead_in", 0.0)
@@ -393,26 +402,35 @@ class _RenderAborted(Exception):
     """El render se canceló a propósito (lo reemplaza otro con correcciones)."""
 
 
-def _render_video_frames(j, engine, report, should_abort=None):
-    """Renderiza el video mudo (frames → ffmpeg). report(pct 0-100).
-    `should_abort()` (opcional) se consulta periódicamente: si devuelve True,
-    se corta ffmpeg, se borra el archivo parcial y se lanza _RenderAborted."""
+# Keyframe estricto cada _GOP_FRAMES (2 s a 30 fps) y sin B-frames: el video
+# queda cortable EXACTAMENTE en esos límites. Al corregir pulsos, solo los
+# tramos afectados se re-renderizan; el resto se copia sin re-codificar.
+_GOP_FRAMES = 60
+
+
+def _x264_args():
+    # veryfast: ~2x más rápido que "fast" con diferencia de calidad
+    # imperceptible a crf 18 (contenido de partitura: trazos nítidos)
+    return ["-vcodec", "libx264", "-preset", "veryfast",
+            "-crf", "18", "-pix_fmt", "yuv420p",
+            "-x264-params",
+            f"keyint={_GOP_FRAMES}:min-keyint={_GOP_FRAMES}:scenecut=0:bframes=0"]
+
+
+def _encode_frames(j, engine, f0, f1, out_path, report, should_abort=None):
+    """Codifica los frames [f0, f1) del motor a `out_path` (video mudo).
+    report(pct 0-100 del tramo). `should_abort()` (opcional): si devuelve
+    True se corta ffmpeg, se borra el parcial y se lanza _RenderAborted."""
     fps      = j["fps"]
-    n_frames = max(1, int(engine.total_duration * fps))
+    n_frames = f1 - f0
     W, H     = engine.video_w, engine.video_h
-    out_path = os.path.join(j["workdir"], "scrolling_score.mp4")
 
     cmd = [
         _find_ffmpeg(), "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo",
         "-s", f"{W}x{H}", "-pix_fmt", "bgr24",
         "-r", str(fps), "-i", "pipe:0",
-        # veryfast: ~2x más rápido que "fast" con diferencia de calidad
-        # imperceptible a crf 18 (contenido de partitura: trazos nítidos)
-        "-vcodec", "libx264", "-preset", "veryfast",
-        "-crf", "18", "-pix_fmt", "yuv420p",
-        out_path,
-    ]
+    ] + _x264_args() + [out_path]
     # stderr va a un archivo: con stderr=PIPE sin lector, el buffer se llena
     # y ffmpeg + este proceso quedan bloqueados (deadlock).
     stderr_path = os.path.join(j["workdir"], "ffmpeg_stderr.log")
@@ -422,14 +440,14 @@ def _render_video_frames(j, engine, report, should_abort=None):
     # acumular frames en RAM; se escriben a ffmpeg en orden estricto.
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor
-    n_workers = min(4, max(1, (os.cpu_count() or 2) - 1))
+    n_workers = min(4, max(2, (os.cpu_count() or 2) - 1))
     window = n_workers * 3
     with open(stderr_path, "wb") as errf:
         pipe = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=errf)
         try:
-            engine.render_frame(0.0)          # calienta cachés (hilo único)
+            engine.render_frame(f0 / fps)     # calienta cachés (hilo único)
             with ThreadPoolExecutor(n_workers) as ex:
-                pending = deque(ex.submit(engine.render_frame, i / fps)
+                pending = deque(ex.submit(engine.render_frame, (f0 + i) / fps)
                                 for i in range(min(window, n_frames)))
                 submitted = len(pending)
                 for i in range(n_frames):
@@ -438,7 +456,7 @@ def _render_video_frames(j, engine, report, should_abort=None):
                     frame = pending.popleft().result()
                     if submitted < n_frames:
                         pending.append(ex.submit(engine.render_frame,
-                                                 submitted / fps))
+                                                 (f0 + submitted) / fps))
                         submitted += 1
                     pipe.stdin.write(frame.tobytes())
                     if i % max(1, n_frames // 100) == 0:
@@ -474,6 +492,117 @@ def _render_video_frames(j, engine, report, should_abort=None):
             err = f.read()
         raise RuntimeError(f"ffmpeg falló:\n{err[-600:]}")
     return out_path
+
+
+def _render_video_frames(j, engine, report, should_abort=None):
+    """Renderiza el video mudo COMPLETO (frames → ffmpeg). report(pct 0-100)."""
+    n_frames = max(1, int(engine.total_duration * j["fps"]))
+    out_path = os.path.join(j["workdir"], "scrolling_score.mp4")
+    return _encode_frames(j, engine, 0, n_frames, out_path, report, should_abort)
+
+
+def _count_frames(path):
+    """Cantidad de frames de video del archivo (ffprobe)."""
+    ffprobe = os.path.join(os.path.dirname(_find_ffmpeg()), "ffprobe")
+    if not os.path.isfile(ffprobe) and not shutil.which("ffprobe"):
+        return None
+    r = subprocess.run(
+        [shutil.which("ffprobe") or ffprobe, "-v", "error",
+         "-count_packets", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", path],
+        capture_output=True, text=True)
+    try:
+        return int(r.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _render_with_fixes_segmented(j, engine, fixes, base_path, report):
+    """Re-render QUIRÚRGICO tras corregir pulsos: solo se re-codifican los
+    tramos (GOPs de 2 s) cuyos compases cambiaron; el resto del video base se
+    copia sin re-codificar y todo se concatena. Con pocas correcciones esto
+    tarda una fracción del re-render completo.
+
+    Devuelve la ruta del video nuevo, o None si no conviene/no se puede
+    (el llamador cae al re-render completo)."""
+    fps = j["fps"]
+    n_frames = max(1, int(engine.total_duration * fps))
+    total_chunks = (n_frames + _GOP_FRAMES - 1) // _GOP_FRAMES
+    if total_chunks < 4 or not os.path.isfile(base_path):
+        return None
+    if _count_frames(base_path) != n_frames:
+        return None          # el base no coincide (otro fps/duración): completo
+
+    # Compases FÍSICOS corregidos → todas sus apariciones en la línea de
+    # tiempo (repeticiones incluidas) marcan sus GOPs como afectados.
+    phys = set()
+    for f in fixes:
+        i = f["i"]
+        if 0 <= i < len(engine._timeline):
+            _t, _d, fn, mi, _b, _bpm = engine._timeline[i]
+            phys.add((fn, mi))
+    chunks = set()
+    for (t0, dur, fn, mi, _b, _bpm) in engine._timeline:
+        if (fn, mi) in phys:
+            a = int(t0 * fps) // _GOP_FRAMES
+            b = int(math.ceil((t0 + dur) * fps)) // _GOP_FRAMES
+            chunks.update(range(max(0, a), min(b, total_chunks - 1) + 1))
+    if not chunks or len(chunks) > 0.6 * total_chunks:
+        return None          # afecta a casi todo: el completo es más simple
+
+    # GOPs → segmentos alternados (copiar / re-renderizar), en frames
+    segs = []
+    for c in range(total_chunks):
+        kind = "render" if c in chunks else "copy"
+        f0 = c * _GOP_FRAMES
+        f1 = min(n_frames, f0 + _GOP_FRAMES)
+        if segs and segs[-1][0] == kind:
+            segs[-1][2] = f1
+        else:
+            segs.append([kind, f0, f1])
+
+    seg_dir = os.path.join(j["workdir"], "segs")
+    shutil.rmtree(seg_dir, ignore_errors=True)
+    os.makedirs(seg_dir)
+    n_render = sum(f1 - f0 for k, f0, f1 in segs if k == "render")
+    done = [0]
+    files = []
+    for idx, (kind, f0, f1) in enumerate(segs):
+        path = os.path.join(seg_dir, f"s{idx:04d}.mp4")
+        if kind == "copy":
+            # cortes SIEMPRE en múltiplos del GOP (keyframes exactos, sin
+            # B-frames): -ss cae en keyframe y -frames:v corta exacto
+            r = subprocess.run(
+                [_find_ffmpeg(), "-y", "-ss", f"{f0 / fps:.6f}", "-i", base_path,
+                 "-frames:v", str(f1 - f0), "-c", "copy",
+                 "-avoid_negative_ts", "make_zero", path],
+                capture_output=True)
+            if r.returncode != 0:
+                return None
+        else:
+            _encode_frames(j, engine, f0, f1, path,
+                           lambda p, a=f0, b=f1: report(
+                               int((done[0] + (b - a) * p / 100) * 100 / n_render)))
+            done[0] += f1 - f0
+        # verificación dura: cada segmento con la cantidad EXACTA de frames
+        if _count_frames(path) != f1 - f0:
+            return None
+        files.append(path)
+
+    list_path = os.path.join(seg_dir, "list.txt")
+    with open(list_path, "w", encoding="utf-8") as f:
+        for p in files:
+            f.write(f"file '{p}'\n")
+    out_path = os.path.join(j["workdir"], "scrolling_score_fixed.mp4")
+    r = subprocess.run(
+        [_find_ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+         "-c", "copy", out_path], capture_output=True)
+    if r.returncode != 0 or _count_frames(out_path) != n_frames:
+        return None
+    # el resultado pasa a ser el nuevo video base (conserva la grilla de GOPs)
+    os.replace(out_path, base_path)
+    shutil.rmtree(seg_dir, ignore_errors=True)
+    return base_path
 
 
 def _render_silent(job_id):
@@ -600,8 +729,18 @@ def _run_finalize(job_id, offset, stretch, skip_audio):
                     f"corregido{'s' if n_ok != 1 else ''}" if n_ok
                     else "Renderizando el video")
             with progress.phase(what, span=(10, 78)) as ph:
-                r["path"] = _render_video_frames(
-                    j, j["engine"], lambda p: ph.update(p / 100))
+                new_path = None
+                if n_ok and r.get("path") and not r.get("aborted"):
+                    # re-render QUIRÚRGICO: solo los tramos afectados; el
+                    # resto se copia del video base sin re-codificar
+                    ph.update(0, "solo los tramos corregidos")
+                    new_path = _render_with_fixes_segmented(
+                        j, j["engine"], fixes, r["path"],
+                        lambda p: ph.update(p / 100))
+                if new_path is None:
+                    new_path = _render_video_frames(
+                        j, j["engine"], lambda p: ph.update(p / 100))
+                r["path"] = new_path
             r["cancel"] = False
             r["aborted"] = False
 
