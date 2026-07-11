@@ -577,14 +577,14 @@ body {
   <!-- Header -->
   <header class="app-header">
     <h1>Scrolling Score</h1>
-    <p>Generador de video de partitura de batería con scroll sincronizado</p>
+    <p>Convierte tus partituras de MuseScore en videos con desplazamiento sincronizado a la m&uacute;sica</p>
   </header>
 
   <!-- Drop Zone -->
   <div class="drop-zone" id="dropZone">
     <div class="dz-icon">&#9835;</div>
-    <div class="dz-title">Arrastrá tus archivos .mscz aquí</div>
-    <div class="dz-sub">o <span class="dz-link" id="dzLink">hacé click para seleccionar</span></div>
+    <div class="dz-title">Arrastra tus archivos .mscz aqu&iacute;</div>
+    <div class="dz-sub">o <span class="dz-link" id="dzLink">haz clic para seleccionarlos</span></div>
     <input type="file" id="fileInput" accept=".mscz" multiple style="display:none">
   </div>
 
@@ -594,7 +594,7 @@ body {
       <span class="az-icon">&#127925;</span>
       <div class="az-text">
         <div class="opt-label">Audio de la canci&oacute;n <span class="az-optional">(opcional)</span></div>
-        <div class="opt-desc" id="audioDesc">Arrastr&aacute; o hac&eacute; click &mdash; mp3, wav, m4a, ogg, flac&hellip; Al terminar se abre el editor para sincronizarlo con la partitura.</div>
+        <div class="opt-desc" id="audioDesc">Arrastra el archivo o haz clic para seleccionarlo (mp3, wav, m4a, ogg, flac&hellip;). Al finalizar se abrir&aacute; el editor para sincronizarlo con la partitura.</div>
         <div class="az-filename" id="audioFilename" style="display:none"></div>
       </div>
       <button class="file-remove" id="audioRemove" style="display:none" title="Quitar audio">&times;</button>
@@ -604,7 +604,7 @@ body {
 
   <!-- File List -->
   <section class="file-list-section card" id="fileListSection">
-    <div class="file-list-header">Archivos · arrastrá para reordenar</div>
+    <div class="file-list-header">Archivos · arrastra para reordenar</div>
     <div id="fileList"></div>
   </section>
 
@@ -642,7 +642,7 @@ body {
 
           <div class="opt-row" id="songNameRow">
             <div class="opt-label">Nombre de la canci&oacute;n</div>
-            <div class="opt-desc">Aparece centrado en el encabezado del video. Si lo dej&aacute;s vac&iacute;o se intenta tomar el t&iacute;tulo de la partitura.</div>
+            <div class="opt-desc">Aparece centrado en el encabezado del video. Si se deja vac&iacute;o, se usa el t&iacute;tulo de la partitura.</div>
             <input type="text" id="optSongName" class="text-input" placeholder="Nombre de la canci&oacute;n&hellip;" maxlength="80">
           </div>
 
@@ -672,8 +672,8 @@ body {
           <div class="opt-row">
             <div class="opt-label">Movimiento</div>
             <div class="seg-row">
-              <label class="radio-chip"><input type="radio" name="phMode" value="fluid" checked><span>Fluido</span></label>
-              <label class="radio-chip"><input type="radio" name="phMode" value="beats"><span>De a saltitos (por tiempo)</span></label>
+              <label class="radio-chip"><input type="radio" name="phMode" value="fluid" checked><span>Continuo</span></label>
+              <label class="radio-chip"><input type="radio" name="phMode" value="beats"><span>Por pulsos</span></label>
             </div>
           </div>
 
@@ -717,7 +717,7 @@ body {
         <div class="set-pane" data-pane="count">
           <h3 class="set-h">Conteo previo</h3>
           <div class="opt-row">
-            <div class="opt-desc">Pulsos de preparaci&oacute;n antes de que arranque la partitura, al tempo exacto de la canci&oacute;n (con un &iexcl;listo? de anticipaci&oacute;n). As&iacute; ten&eacute;s tiempo de reaccionar al darle play.</div>
+            <div class="opt-desc">Pulsos de preparaci&oacute;n antes de que comience la partitura, al tempo exacto de la pieza, con un instante previo de anticipaci&oacute;n para reaccionar al iniciar el video.</div>
             <div class="slider-row">
               <input type="range" id="optCountIn" min="0" max="8" value="4" step="1">
               <span class="slider-value" id="optCountInVal">4 tiempos</span>
@@ -731,7 +731,7 @@ body {
           <h3 class="set-h">Dispositivo</h3>
           <div class="opt-row">
             <div class="opt-label">Resoluci&oacute;n de la pantalla destino</div>
-            <div class="opt-desc">La resoluci&oacute;n del dispositivo donde vas a mostrar el video (tele, monitor, tablet&hellip;). El video se genera exactamente a ese tama&ntilde;o, con la partitura escalada de forma ideal &mdash; sea una tele muy ancha o un monitor cuadrado.</div>
+            <div class="opt-desc">La resoluci&oacute;n del dispositivo donde se reproducir&aacute; el video (televisor, monitor, tablet&hellip;). El video se genera exactamente a ese tama&ntilde;o, con la partitura escalada de forma &oacute;ptima para esa pantalla.</div>
             <select id="optResPreset" class="text-input">
               <option value="auto" selected>Autom&aacute;tica (seg&uacute;n la partitura)</option>
               <option value="1920x1080">Full HD &mdash; 1920 &times; 1080</option>
@@ -745,7 +745,7 @@ body {
               <input type="number" id="optResW" class="text-input" min="320" max="3840" step="2" value="1920"> &times;
               <input type="number" id="optResH" class="text-input" min="240" max="2160" step="2" value="1080"> px
             </div>
-            <div class="opt-desc" style="margin-top:8px">&#9432; A mayor resoluci&oacute;n, m&aacute;s tarda el render: 4K procesa ~11&times; m&aacute;s p&iacute;xeles que la autom&aacute;tica. Si el video va a un monitor com&uacute;n, la autom&aacute;tica o Full HD son ideales.</div>
+            <div class="opt-desc" style="margin-top:8px">&#9432; A mayor resoluci&oacute;n, mayor tiempo de generaci&oacute;n: 4K procesa unas 11 veces m&aacute;s p&iacute;xeles que la autom&aacute;tica. Para un monitor com&uacute;n, la autom&aacute;tica o Full HD son ideales.</div>
           </div>
         </div>
 
@@ -753,7 +753,7 @@ body {
         <div class="set-pane" data-pane="defaults">
           <h3 class="set-h">Valores por defecto</h3>
           <div class="opt-row">
-            <div class="opt-desc">Guard&aacute; la configuraci&oacute;n actual para que aparezca as&iacute; cada vez que abras el programa (se guarda en este navegador).</div>
+            <div class="opt-desc">Guarda la configuraci&oacute;n actual para que se aplique cada vez que abras el programa (se almacena en este navegador).</div>
             <div class="btn-row">
               <button class="ed-btn primary" id="btnSaveDefaults" type="button">&#128190; Guardar como predeterminada</button>
               <button class="ed-btn" id="btnFactoryDefaults" type="button">Restaurar valores de f&aacute;brica</button>
@@ -762,7 +762,7 @@ body {
           </div>
           <div class="opt-row">
             <div class="opt-label">Perfiles de configuraci&oacute;n</div>
-            <div class="opt-desc">Guard&aacute; configuraciones completas con nombre y aplicalas con un click &mdash; ideal si distintas personas o proyectos usan el programa con gustos distintos, sin tocar tu valor predeterminado.</div>
+            <div class="opt-desc">Guarda configuraciones completas con nombre y apl&iacute;calas con un clic &mdash; ideal cuando distintas personas o proyectos usan el programa con preferencias diferentes, sin modificar los valores predeterminados.</div>
             <div class="btn-row">
               <input type="text" id="profileName" class="text-input" maxlength="40"
                      placeholder="Nombre del perfil (p. ej. &laquo;Ensayo TV del sal&oacute;n&raquo;)" style="flex:1; min-width:180px">
@@ -793,7 +793,7 @@ body {
   <div class="error-box" id="errorBox"></div>
 
   <!-- Download -->
-  <a class="btn-download" id="btnDownload">&#8595; Descargar scrolling_score.mp4</a>
+  <a class="btn-download" id="btnDownload">&#8595; Descargar el video</a>
   <button class="btn-reset" id="btnReset" type="button">Generar otro video</button>
 
 </div>
@@ -821,7 +821,7 @@ body {
       <canvas id="edSheet"></canvas>
       <div class="ed-page-label" id="edPageLabel"></div>
       <div class="ed-sheet-tools">
-        <button class="ed-sheet-btn" id="edUnlock" style="display:none" title="Desbloquear TODOS los pulsos para moverlos (&uacute;ltimo recurso)">🔓</button>
+        <button class="ed-sheet-btn" id="edUnlock" style="display:none" title="Desbloquear todos los pulsos para moverlos libremente (usar con cuidado)">🔓</button>
         <button class="ed-sheet-btn" id="edZoomScoreOut" title="Alejar la partitura">&minus;</button>
         <button class="ed-sheet-btn" id="edZoomScoreIn" title="Acercar la partitura">+</button>
         <button class="ed-sheet-btn" id="edZoomScoreReset" title="Ajustar a la pantalla">⤢</button>
@@ -831,7 +831,7 @@ body {
       <div class="ed-pulse-tools" id="edPulseTools">
         <button id="edPulseEdit" title="Corregir este pulso">&#9998; Corregir</button>
         <button id="edPulseSave" title="Guardar la correcci&oacute;n">&#10003; Guardar</button>
-        <button id="edPulseCancel" title="Deshacer y dejarlo como estaba">&#8630;</button>
+        <button id="edPulseCancel" title="Deshacer la correcci&oacute;n">&#8630;</button>
       </div>
     </div>
     <button class="ed-page-nav" id="edNextPage" type="button">&#8250;</button>
@@ -840,16 +840,16 @@ body {
   <!-- dos tiras de tiempo: PARTITURA arriba, CANCIÓN abajo -->
   <div class="ed-bottom">
     <div class="ed-transport">
-      <button class="ed-btn" id="edToStart" type="button" title="Ir al inicio (lo que empiece primero: partitura o canci&oacute;n)">&#9198;</button>
+      <button class="ed-btn" id="edToStart" type="button" title="Ir al inicio (partitura o canci&oacute;n, lo que comience primero)">&#9198;</button>
       <button class="ed-btn primary" id="edPlay" type="button">&#9654; Reproducir</button>
-      <button class="ed-btn" id="edTestEnd" type="button" title="Si al final sigue a tiempo, qued&oacute; perfecto">Probar el final</button>
+      <button class="ed-btn" id="edTestEnd" type="button" title="Reproduce los &uacute;ltimos compases para comprobar que la sincronizaci&oacute;n se mantiene hasta el final">Probar el final</button>
       <span class="ed-time" id="edTime">0:00.000</span>
       <span class="ed-measure-ind" id="edMeasureInd"></span>
       <span class="ed-sep"></span>
       <span class="ed-align-info" id="edAlignInfo"></span>
       <span style="flex:1"></span>
-      <label class="ed-check" title="La tira de la partitura se mueve de a un tiempo exacto de la canci&oacute;n">
-        <input type="checkbox" id="edSnapBeats" checked> Partitura de a tiempos
+      <label class="ed-check" title="Al arrastrar, la partitura se desplaza en pasos de un tiempo musical exacto">
+        <input type="checkbox" id="edSnapBeats" checked> Ajustar a los tiempos
       </label>
       <button class="ed-nudge" id="edZoomOut" title="Alejar">&minus;</button>
       <button class="ed-nudge" id="edZoomIn" title="Acercar">+</button>
@@ -857,10 +857,10 @@ body {
     </div>
     <canvas id="edTracks"></canvas>
     <div class="ed-wave-hint">
-      Arrastr&aacute; la tira de la <b style="color:var(--orange)">partitura</b> (arriba) o de la <b style="color:#5ac8ff">canci&oacute;n</b> (abajo) para alinearlas &middot;
-      arrastr&aacute; la <b>l&iacute;nea blanca</b> para moverla (se imanta a los tiempos) &middot; click = mover el cursor &middot; rueda = zoom &middot;
-      <kbd>Espacio</kbd> reproducir/pausar desde la l&iacute;nea blanca &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10ms (<kbd>Shift</kbd> = 1ms) &middot;
-      <kbd>D</kbd> diagn&oacute;stico: ver compases y pulsos (toc&aacute; un pulso y us&aacute; ✏ Corregir para moverlo)
+      Arrastra la banda de la <b style="color:var(--orange)">partitura</b> (arriba) o de la <b style="color:#5ac8ff">canci&oacute;n</b> (abajo) para alinearlas &middot;
+      arrastra la <b>l&iacute;nea blanca</b> para moverla (se ajusta a los tiempos) &middot; clic = mover el cursor &middot; rueda = zoom &middot;
+      <kbd>Espacio</kbd> reproducir/pausar desde la l&iacute;nea blanca &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10&nbsp;ms (<kbd>Shift</kbd> = 1&nbsp;ms) &middot;
+      <kbd>D</kbd> diagn&oacute;stico: compases y pulsos (selecciona un pulso y usa ✏ Corregir para ajustarlo)
     </div>
   </div>
 
@@ -982,7 +982,7 @@ function renderFileList() {
     item.draggable = true;
     item.dataset.idx = i;
     item.innerHTML = `
-      <span class="file-handle" title="Arrastrá para reordenar">&#8801;</span>
+      <span class="file-handle" title="Arrastra para reordenar">&#8801;</span>
       <span class="file-num">${i + 1}</span>
       <span class="file-name" title="${f.name}">${f.name}</span>
       <button class="file-remove" data-idx="${i}" title="Quitar">&times;</button>
@@ -1201,7 +1201,7 @@ function applySettings(s) {
 document.getElementById("btnSaveDefaults").addEventListener("click", () => {
   try {
     localStorage.setItem("ss_defaults", JSON.stringify(gatherSettings()));
-    document.getElementById("defaultsMsg").textContent = "✓ Guardado: así va a aparecer cada vez que abras el programa.";
+    document.getElementById("defaultsMsg").textContent = "✓ Guardado: esta configuración se aplicará al abrir el programa.";
   } catch (e) {
     document.getElementById("defaultsMsg").textContent = "No se pudo guardar en este navegador.";
   }
@@ -1247,16 +1247,16 @@ function renderProfiles() {
     const del = document.createElement("button");
     del.type = "button"; del.className = "profile-del";
     if (profDelArm === nm) {
-      del.textContent = "¿borrar?"; del.classList.add("armed");
-      del.title = "Click de nuevo para borrar definitivamente";
+      del.textContent = "¿Eliminar?"; del.classList.add("armed");
+      del.title = "Haz clic de nuevo para eliminarlo definitivamente";
     } else {
-      del.textContent = "✕"; del.title = `Borrar el perfil «${nm}»`;
+      del.textContent = "✕"; del.title = `Eliminar el perfil «${nm}»`;
     }
     del.addEventListener("click", () => {
       if (profDelArm !== nm) { profDelArm = nm; renderProfiles(); return; }
       const oo = loadProfiles(); delete oo[nm]; storeProfiles(oo);
       profDelArm = null;
-      profileMsg.textContent = `Perfil «${nm}» borrado.`;
+      profileMsg.textContent = `Perfil «${nm}» eliminado.`;
       renderProfiles();
     });
     chip.appendChild(apply); chip.appendChild(del);
@@ -1265,11 +1265,11 @@ function renderProfiles() {
 }
 document.getElementById("btnSaveProfile").addEventListener("click", () => {
   const nm = profileName.value.trim();
-  if (!nm) { profileMsg.textContent = "Escribí un nombre para el perfil."; return; }
+  if (!nm) { profileMsg.textContent = "Escribe un nombre para el perfil."; return; }
   const o = loadProfiles();
   const existed = nm in o;
   if (!existed && Object.keys(o).length >= 40) {
-    profileMsg.textContent = "Demasiados perfiles (máx. 40) — borrá alguno primero.";
+    profileMsg.textContent = "Demasiados perfiles (máx. 40) — elimina alguno primero.";
     return;
   }
   o[nm] = gatherSettings();
@@ -2283,7 +2283,7 @@ function updateReadouts() {
   const off = offset();
   ed.align.textContent = off >= 0
     ? "El compás 1 cae en " + fmtTime(off) + " de la canción"
-    : "La partitura arranca " + fmtTime(-off) + " antes que la canción";
+    : "La partitura comienza " + fmtTime(-off) + " antes que la canción";
 }
 
 function updateAll() {
