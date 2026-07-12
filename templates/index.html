@@ -292,6 +292,9 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .profile-chip .profile-apply:hover { color: var(--orange); }
+.profile-chip.active { border-color: var(--orange); background: rgba(255,165,0,0.13); }
+.profile-chip.active .profile-apply { color: var(--orange); font-weight: 600; }
+.profile-chip.active .profile-apply::before { content: "✓ "; }
 .profile-chip .profile-del {
   background: rgba(0,0,0,0.25); border: none; border-left: 1px solid var(--border);
   color: #8a93a8; cursor: pointer; padding: 0 8px; font-size: 0.8rem;
@@ -762,7 +765,7 @@ body {
           </div>
           <div class="opt-row">
             <div class="opt-label">Perfiles de configuraci&oacute;n</div>
-            <div class="opt-desc">Guarda configuraciones completas con nombre y apl&iacute;calas con un clic &mdash; ideal cuando distintas personas o proyectos usan el programa con preferencias diferentes, sin modificar los valores predeterminados.</div>
+            <div class="opt-desc">Guarda la configuraci&oacute;n actual con un nombre y apl&iacute;cala con un clic. El perfil activo se muestra resaltado.</div>
             <div class="btn-row">
               <input type="text" id="profileName" class="text-input" maxlength="40"
                      placeholder="Nombre del perfil (p. ej. &laquo;Ensayo TV del sal&oacute;n&raquo;)" style="flex:1; min-width:180px">
@@ -1227,21 +1230,32 @@ function storeProfiles(o) {
   catch (e) { return false; }
 }
 let profDelArm = null;   // nombre "armado" para confirmar el borrado
+// firma canónica de una configuración → detectar qué perfil está activo
+// (coincide con la configuración actual) sin llevar estado aparte
+function settingsSig(s) {
+  s = { ...FACTORY, ...s };
+  // songName es volátil (se escribe por canción, no por perfil): excluirlo
+  // para que escribir el nombre de la canción no "apague" el perfil activo
+  return JSON.stringify(Object.keys(FACTORY)
+    .filter(k => k !== "songName").map(k => s[k]));
+}
 function renderProfiles() {
   const o = loadProfiles();
   const names = Object.keys(o).sort((a, b) => a.localeCompare(b, "es"));
   profileList.innerHTML = "";
   profileList.style.display = names.length ? "" : "none";
+  const curSig = settingsSig(gatherSettings());
   for (const nm of names) {
     const chip = document.createElement("span");
     chip.className = "profile-chip";
+    if (settingsSig(o[nm]) === curSig) chip.classList.add("active");
     const apply = document.createElement("button");
     apply.type = "button"; apply.className = "profile-apply";
     apply.textContent = nm;
     apply.title = "Aplicar este perfil (cambia toda la configuración)";
     apply.addEventListener("click", () => {
       applySettings({ ...FACTORY, ...o[nm] });
-      profileMsg.textContent = `✓ Perfil «${nm}» aplicado.`;
+      profileMsg.textContent = "";
       profDelArm = null; renderProfiles();
     });
     const del = document.createElement("button");
@@ -1278,11 +1292,26 @@ document.getElementById("btnSaveProfile").addEventListener("click", () => {
                : `✓ Perfil «${nm}» guardado.`)
     : "No se pudo guardar en este navegador.";
   profileName.value = "";
+  updateProfileBtn();
   profDelArm = null;
   renderProfiles();
 });
 profileName.addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("btnSaveProfile").click();
+});
+// el botón avisa solo si el nombre ya existe: guardar de nuevo = actualizar
+function updateProfileBtn() {
+  const exists = profileName.value.trim() in loadProfiles();
+  document.getElementById("btnSaveProfile").innerHTML =
+    exists ? "&#10227; Actualizar perfil" : "&#43; Guardar perfil";
+}
+profileName.addEventListener("input", updateProfileBtn);
+// cualquier cambio en la configuración re-evalúa qué perfil queda activo
+optPanel.addEventListener("input", e => {
+  if (e.target !== profileName) renderProfiles();
+});
+optPanel.addEventListener("change", e => {
+  if (e.target !== profileName) renderProfiles();
 });
 renderProfiles();
 
@@ -1356,9 +1385,13 @@ function listenProgress(jobId) {
       evtSource.close();
       evtSource = null;
       if (data.error) {
-        showError(data.msg);
+        // si el trabajo ya tenía editor de sincronización, el error (p. ej.
+        // en la mezcla final) NO obliga a re-subir todo: se puede volver al
+        // editor y reintentar — el servidor admite reintentos
+        showError(data.msg, hadEditor && jobId === currentJobId);
         setGenerating(false);
       } else if (data.editor) {
+        hadEditor = true;
         openEditor(jobId);
       } else {
         showDownload(jobId);
@@ -1385,6 +1418,7 @@ function showDownload(jobId) {
 btnReset.addEventListener("click", () => {
   files         = [];
   currentJobId  = null;
+  hadEditor     = false;
   if (evtSource) { evtSource.close(); evtSource = null; }
   clearAudioFile();
   closeEditor();
@@ -1411,8 +1445,22 @@ function setGenerating(on) {
   btnGenerate.textContent = on ? "Generando…" : "Generar Video";
 }
 
-function showError(msg) {
+let hadEditor = false;   // este trabajo abrió el editor → un error es reintentable
+function showError(msg, canRetryEditor = false) {
   errorBox.textContent = msg;
+  if (canRetryEditor) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ed-btn";
+    btn.style.cssText = "display:block; margin:10px auto 0";
+    btn.textContent = "↩ Volver al editor de sincronización";
+    btn.addEventListener("click", () => {
+      errorBox.classList.remove("visible");
+      progressSec.classList.remove("visible");
+      openEditor(currentJobId);
+    });
+    errorBox.appendChild(btn);
+  }
   errorBox.classList.add("visible");
 }
 
@@ -1579,6 +1627,7 @@ function openEditor(jobId) {
     ed.unlock.style.display = "none"; ed.unlock.innerHTML = "🔓";
     ed.unlock.classList.remove("danger");
     edPrePlay = null; ed.play.innerHTML = "&#9654; Reproducir";
+    ed.finalize.disabled = ed.skip.disabled = false;   // reintentos tras error
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     loadWaveEnvelope(jobId);
@@ -2380,10 +2429,16 @@ function seekToSig(sig, magnet) {
   // el audio sólo puede posicionarse dentro de su propio rango
   edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
   if (edPrePlay) {
-    // reproduciendo en la zona previa al audio: re-basar el reloj (o pasar
-    // el mando al audio si el salto cayó dentro de su rango)
-    if (edCursor >= edA) { edPrePlay = null; edAudio.play().catch(() => {}); }
-    else edPrePlay = { t0: performance.now(), sig0: edCursor };
+    // reproduciendo por reloj fuera del audio: re-basar el reloj, o pasar el
+    // mando al audio SOLO si el salto cayó dentro de su rango real (antes,
+    // saltar dentro de la zona posterior arrancaba el audio cerca del final)
+    const end = edA + edData.audio.duration;
+    if (edCursor >= edA && edCursor < end - 0.15) {
+      edPrePlay = null;
+      edAudio.play().catch(() => pauseAll());
+    } else {
+      edPrePlay = { t0: performance.now(), sig0: edCursor };
+    }
   }
 }
 
@@ -2467,6 +2522,11 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (!ed.el.classList.contains("visible") || !edData) return;
+  // escribiendo en un campo de texto, los atajos del editor NO aplican (antes,
+  // tipear "d" o espacio en «Nombre del perfil» disparaba el modo D o la
+  // reproducción del editor que estaba detrás del modal)
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
   if (e.key === "Escape" && edEditSel) { cancelPulseEdit(); return; }
   if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {

@@ -398,24 +398,53 @@ def _parse_score_xml(mscx_path):
         infos.append({"beats": beats, "qps": qps,
                       "onsets": sorted(onsets) if ok else None})
 
+    # ── Casillas (voltas): 1ª/2ª casilla, canciones estróficas ───────────────
+    # Cada casilla cubre `span` compases desde donde arranca y sólo suena en
+    # las pasadas de su lista `endings` (p. ej. "1, 2"). Sin esto, la 1ª casilla
+    # se repetiría en cada pasada y la 2ª nunca sonaría → desincronización.
+    volta_start = {}   # índice de compás → (conjunto de pasadas, nº de compases)
+    for mi, m in enumerate(measures):
+        for sp in m.iter('Spanner'):
+            if sp.get('type') != 'Volta':
+                continue
+            v = sp.find('Volta')
+            if v is None:                 # es el cierre del spanner, no el inicio
+                continue
+            endings = {int(x) for x in re.findall(r'\d+', v.findtext('endings') or '')}
+            sp_el = sp.find('next/location/measures')
+            try:
+                span = int(sp_el.text) if sp_el is not None else 1
+            except (TypeError, ValueError):
+                span = 1
+            volta_start[mi] = (endings or {1}, max(1, span))
+            break
+
     # Expansión de repeticiones. Un endRepeat sin startRepeat previo repite
-    # desde el comienzo (o desde el final de la repetición anterior), igual
-    # que en la convención musical.
-    played, i, last_start = [], 0, 0
-    while i < len(measures):
-        m = measures[i]
-        if m.find('.//startRepeat') is not None:
-            last_start = i
-        end_el = m.find('.//endRepeat')
+    # desde el comienzo (o desde el final de la repetición anterior). En cada
+    # pasada, si el compás inicia una casilla que no incluye la pasada actual,
+    # se salta toda la casilla (incluido el endRepeat que pueda contener).
+    played, i, last_start, cur_pass, guard = [], 0, 0, 1, 0
+    limit = 200000
+    while i < len(measures) and guard < limit:
+        guard += 1
+        if measures[i].find('.//startRepeat') is not None and i != last_start:
+            last_start = i          # nueva región de repetición: cuenta desde 1
+            cur_pass = 1
+        if i in volta_start:
+            endings, span = volta_start[i]
+            if cur_pass not in endings:
+                i += span           # esta casilla no va en esta pasada
+                continue
+        played.append(i)
+        end_el = measures[i].find('.//endRepeat')
         if end_el is not None:
             txt = (end_el.text or "").strip()
             times = int(txt) if txt.isdigit() and int(txt) >= 2 else 2
-            played.append(i)
-            for _ in range(times - 1):
-                played.extend(range(last_start, i + 1))
-            last_start = i + 1
-        else:
-            played.append(i)
+            if cur_pass < times:
+                cur_pass += 1
+                i = last_start      # volver al inicio de la repetición
+                continue
+            cur_pass = 1            # repetición agotada: seguir de largo
         i += 1
     return {"measures": infos, "n_measures": len(measures), "played": played}
 
@@ -1180,7 +1209,10 @@ class ScoreEngine:
             else:
                 x_svg = self._measure_x_at(fn, mi, m_prog, beats, mx0, mx1)
             vl_x = max(0, min(self.video_w - 1, int(x_svg * sv)))
-            eff_hdr = int(_HEADER_H * h_prog) + 4
+            # el recorte superior sólo aplica si el encabezado se está
+            # dibujando de verdad; con show_header=False no hay barra que evitar
+            header_on = cfg.get("show_header", True) and self.video_h > _HEADER_H + 20
+            eff_hdr = (int(_HEADER_H * h_prog) + 4) if header_on else 0
             vl_top  = max(eff_hdr, ht)
             vl_bot  = min(self.video_h - 1, hb)
             pc = cfg["playhead_color"]
