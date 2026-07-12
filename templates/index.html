@@ -1234,7 +1234,10 @@ let profDelArm = null;   // nombre "armado" para confirmar el borrado
 // (coincide con la configuración actual) sin llevar estado aparte
 function settingsSig(s) {
   s = { ...FACTORY, ...s };
-  return JSON.stringify(Object.keys(FACTORY).map(k => s[k]));
+  // songName es volátil (se escribe por canción, no por perfil): excluirlo
+  // para que escribir el nombre de la canción no "apague" el perfil activo
+  return JSON.stringify(Object.keys(FACTORY)
+    .filter(k => k !== "songName").map(k => s[k]));
 }
 function renderProfiles() {
   const o = loadProfiles();
@@ -1382,9 +1385,13 @@ function listenProgress(jobId) {
       evtSource.close();
       evtSource = null;
       if (data.error) {
-        showError(data.msg);
+        // si el trabajo ya tenía editor de sincronización, el error (p. ej.
+        // en la mezcla final) NO obliga a re-subir todo: se puede volver al
+        // editor y reintentar — el servidor admite reintentos
+        showError(data.msg, hadEditor && jobId === currentJobId);
         setGenerating(false);
       } else if (data.editor) {
+        hadEditor = true;
         openEditor(jobId);
       } else {
         showDownload(jobId);
@@ -1411,6 +1418,7 @@ function showDownload(jobId) {
 btnReset.addEventListener("click", () => {
   files         = [];
   currentJobId  = null;
+  hadEditor     = false;
   if (evtSource) { evtSource.close(); evtSource = null; }
   clearAudioFile();
   closeEditor();
@@ -1437,8 +1445,22 @@ function setGenerating(on) {
   btnGenerate.textContent = on ? "Generando…" : "Generar Video";
 }
 
-function showError(msg) {
+let hadEditor = false;   // este trabajo abrió el editor → un error es reintentable
+function showError(msg, canRetryEditor = false) {
   errorBox.textContent = msg;
+  if (canRetryEditor) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ed-btn";
+    btn.style.cssText = "display:block; margin:10px auto 0";
+    btn.textContent = "↩ Volver al editor de sincronización";
+    btn.addEventListener("click", () => {
+      errorBox.classList.remove("visible");
+      progressSec.classList.remove("visible");
+      openEditor(currentJobId);
+    });
+    errorBox.appendChild(btn);
+  }
   errorBox.classList.add("visible");
 }
 
@@ -1605,6 +1627,7 @@ function openEditor(jobId) {
     ed.unlock.style.display = "none"; ed.unlock.innerHTML = "🔓";
     ed.unlock.classList.remove("danger");
     edPrePlay = null; ed.play.innerHTML = "&#9654; Reproducir";
+    ed.finalize.disabled = ed.skip.disabled = false;   // reintentos tras error
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;
     loadWaveEnvelope(jobId);
@@ -2406,10 +2429,16 @@ function seekToSig(sig, magnet) {
   // el audio sólo puede posicionarse dentro de su propio rango
   edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
   if (edPrePlay) {
-    // reproduciendo en la zona previa al audio: re-basar el reloj (o pasar
-    // el mando al audio si el salto cayó dentro de su rango)
-    if (edCursor >= edA) { edPrePlay = null; edAudio.play().catch(() => {}); }
-    else edPrePlay = { t0: performance.now(), sig0: edCursor };
+    // reproduciendo por reloj fuera del audio: re-basar el reloj, o pasar el
+    // mando al audio SOLO si el salto cayó dentro de su rango real (antes,
+    // saltar dentro de la zona posterior arrancaba el audio cerca del final)
+    const end = edA + edData.audio.duration;
+    if (edCursor >= edA && edCursor < end - 0.15) {
+      edPrePlay = null;
+      edAudio.play().catch(() => pauseAll());
+    } else {
+      edPrePlay = { t0: performance.now(), sig0: edCursor };
+    }
   }
 }
 
@@ -2493,6 +2522,11 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (!ed.el.classList.contains("visible") || !edData) return;
+  // escribiendo en un campo de texto, los atajos del editor NO aplican (antes,
+  // tipear "d" o espacio en «Nombre del perfil» disparaba el modo D o la
+  // reproducción del editor que estaba detrás del modal)
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
   if (e.key === "Escape" && edEditSel) { cancelPulseEdit(); return; }
   if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
