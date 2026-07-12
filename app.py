@@ -136,9 +136,14 @@ def create_app():
             # borra nada: el barrido de /upload limpiará el directorio después.
             import time as _t
             _t.sleep(120)
-            if j.get("finalizing") or not j.get("done"):
-                j["_cleanup"] = False
-                return
+            # decidir BAJO el lock: si en el ínterin arrancó otro finalize,
+            # no se borra nada; si vamos a borrar, _gone impide que un
+            # finalize posterior use archivos a medio eliminar
+            with _jobs_lock:
+                if j.get("finalizing") or not j.get("done"):
+                    j["_cleanup"] = False
+                    return
+                j["_gone"] = True
             shutil.rmtree(j["workdir"], ignore_errors=True)
             jobs.pop(job_id, None)
 
@@ -221,6 +226,9 @@ def create_app():
             return jsonify({"error": "Parámetros inválidos"}), 400
 
         with _jobs_lock:
+            if j.get("_gone"):
+                return jsonify({"error": "Este trabajo ya se descargó y se "
+                                "limpió — generá el video de nuevo."}), 409
             if j.get("finalizing"):
                 return jsonify({"error": "Ya se está generando el video final"}), 409
             j["finalizing"] = True
@@ -502,19 +510,32 @@ def _render_video_frames(j, engine, report, should_abort=None):
 
 
 def _count_frames(path):
-    """Cantidad de frames de video del archivo (ffprobe)."""
-    ffprobe = os.path.join(os.path.dirname(_find_ffmpeg()), "ffprobe")
-    if not os.path.isfile(ffprobe) and not shutil.which("ffprobe"):
-        return None
+    """Cantidad de frames de video del archivo. Usa ffprobe si existe; si no
+    (la app puede distribuirse solo con ffmpeg.exe en vendor/), cuenta los
+    paquetes con ffmpeg copiando a null — rápido, sin decodificar."""
+    ffmpeg = _find_ffmpeg()
+    probe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    cands = [shutil.which("ffprobe"),
+             os.path.join(os.path.dirname(ffmpeg), probe_name)]
+    probe = next((c for c in cands if c and os.path.isfile(c)), None)
+    if probe:
+        r = subprocess.run(
+            [probe, "-v", "error",
+             "-count_packets", "-select_streams", "v:0",
+             "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", path],
+            capture_output=True, text=True)
+        try:
+            return int(r.stdout.strip())
+        except ValueError:
+            return None
+    # (decodifica a null: h264 decodifica a cientos de fps, sigue siendo
+    # muchísimo más barato que re-codificar el video entero)
     r = subprocess.run(
-        [shutil.which("ffprobe") or ffprobe, "-v", "error",
-         "-count_packets", "-select_streams", "v:0",
-         "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", path],
-        capture_output=True, text=True)
-    try:
-        return int(r.stdout.strip())
-    except ValueError:
-        return None
+        [ffmpeg, "-v", "info", "-i", path, "-map", "0:v:0", "-f", "null",
+         os.devnull],
+        capture_output=True, text=True, errors="replace")
+    m = re.findall(r"frame=\s*(\d+)", r.stderr)
+    return int(m[-1]) if m else None
 
 
 def _render_with_fixes_segmented(j, engine, fixes, base_path, report):
@@ -564,45 +585,48 @@ def _render_with_fixes_segmented(j, engine, fixes, base_path, report):
     seg_dir = os.path.join(j["workdir"], "segs")
     shutil.rmtree(seg_dir, ignore_errors=True)
     os.makedirs(seg_dir)
-    n_render = sum(f1 - f0 for k, f0, f1 in segs if k == "render")
-    done = [0]
-    files = []
-    for idx, (kind, f0, f1) in enumerate(segs):
-        path = os.path.join(seg_dir, f"s{idx:04d}.mp4")
-        if kind == "copy":
-            # cortes SIEMPRE en múltiplos del GOP (keyframes exactos, sin
-            # B-frames): -ss cae en keyframe y -frames:v corta exacto
-            r = subprocess.run(
-                [_find_ffmpeg(), "-y", "-ss", f"{f0 / fps:.6f}", "-i", base_path,
-                 "-frames:v", str(f1 - f0), "-c", "copy",
-                 "-avoid_negative_ts", "make_zero", path],
-                capture_output=True)
-            if r.returncode != 0:
+    try:
+        n_render = sum(f1 - f0 for k, f0, f1 in segs if k == "render")
+        done = [0]
+        files = []
+        for idx, (kind, f0, f1) in enumerate(segs):
+            path = os.path.join(seg_dir, f"s{idx:04d}.mp4")
+            if kind == "copy":
+                # cortes SIEMPRE en múltiplos del GOP (keyframes exactos, sin
+                # B-frames): -ss cae en keyframe y -frames:v corta exacto
+                r = subprocess.run(
+                    [_find_ffmpeg(), "-y", "-ss", f"{f0 / fps:.6f}", "-i", base_path,
+                     "-frames:v", str(f1 - f0), "-c", "copy",
+                     "-avoid_negative_ts", "make_zero", path],
+                    capture_output=True)
+                if r.returncode != 0:
+                    return None
+            else:
+                _encode_frames(j, engine, f0, f1, path,
+                               lambda p, a=f0, b=f1: report(
+                                   int((done[0] + (b - a) * p / 100) * 100 / n_render)))
+                done[0] += f1 - f0
+            # verificación dura: cada segmento con la cantidad EXACTA de frames
+            if _count_frames(path) != f1 - f0:
                 return None
-        else:
-            _encode_frames(j, engine, f0, f1, path,
-                           lambda p, a=f0, b=f1: report(
-                               int((done[0] + (b - a) * p / 100) * 100 / n_render)))
-            done[0] += f1 - f0
-        # verificación dura: cada segmento con la cantidad EXACTA de frames
-        if _count_frames(path) != f1 - f0:
-            return None
-        files.append(path)
+            files.append(path)
 
-    list_path = os.path.join(seg_dir, "list.txt")
-    with open(list_path, "w", encoding="utf-8") as f:
-        for p in files:
-            f.write(f"file '{p}'\n")
-    out_path = os.path.join(j["workdir"], "scrolling_score_fixed.mp4")
-    r = subprocess.run(
-        [_find_ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-         "-c", "copy", out_path], capture_output=True)
-    if r.returncode != 0 or _count_frames(out_path) != n_frames:
-        return None
-    # el resultado pasa a ser el nuevo video base (conserva la grilla de GOPs)
-    os.replace(out_path, base_path)
-    shutil.rmtree(seg_dir, ignore_errors=True)
-    return base_path
+        list_path = os.path.join(seg_dir, "list.txt")
+        with open(list_path, "w", encoding="utf-8") as f:
+            for p in files:
+                f.write(f"file '{p}'\n")
+        out_path = os.path.join(j["workdir"], "scrolling_score_fixed.mp4")
+        r = subprocess.run(
+            [_find_ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+             "-c", "copy", out_path], capture_output=True)
+        if r.returncode != 0 or _count_frames(out_path) != n_frames:
+            return None
+        # el resultado pasa a ser el nuevo video base (conserva la grilla de GOPs)
+        os.replace(out_path, base_path)
+        return base_path
+    finally:
+        # también en los return None intermedios: sin segmentos huérfanos
+        shutil.rmtree(seg_dir, ignore_errors=True)
 
 
 def _render_silent(job_id):
