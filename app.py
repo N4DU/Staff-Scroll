@@ -690,6 +690,9 @@ def _build_editor_data(engine, analysis):
     return {
         "song_name":      engine.song_name,
         "score_bpm":      engine._timeline[0][5] if engine._timeline else 120,
+        # modo de la línea: "fluid" (continua) o "beats" (de a saltitos) — el
+        # editor la dibuja igual que el video para que coincidan
+        "playhead_mode":  engine.cfg.get("playhead_mode", "fluid"),
         "lead_in":        round(lead, 4),
         "count_beats":    getattr(engine, "count_beats", 0),
         "music_duration": round(engine.total_duration - lead, 4),
