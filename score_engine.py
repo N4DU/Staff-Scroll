@@ -376,6 +376,10 @@ def _parse_score_xml(mscx_path):
     measures = staff.findall('Measure') if staff is not None else root.findall('.//Measure')
     if not measures:
         raise ValueError(f"No se encontraron compases en {os.path.basename(mscx_path)}")
+    # nº de pentagramas con contenido (>1 = piano/cuarteto/coro): sirve para
+    # distinguir un archivo multi-pentagrama de uno multi-hoja mal repartido.
+    n_staves = len([st for st in root.findall('.//Score/Staff')
+                    if st.find('Measure') is not None]) or 1
 
     sig_n, sig_d = 4, 4
     qps = None  # negras por segundo; None = sin marca todavía
@@ -473,7 +477,8 @@ def _parse_score_xml(mscx_path):
                 continue
             cur_pass = 1            # repetición agotada: seguir de largo
         i += 1
-    return {"measures": infos, "n_measures": len(measures), "played": played}
+    return {"measures": infos, "n_measures": len(measures), "played": played,
+            "n_staves": n_staves}
 
 
 def _extract_title(mscx_path):
@@ -657,6 +662,18 @@ class ScoreEngine:
                         "puede saber qué compás cae en qué hoja.")
                 counts.append(sum(len(b) - 1 for b in sb))
             if sum(counts) != full["n_measures"]:
+                # Un archivo con VARIOS PENTAGRAMAS (piano, cuarteto, coro) cuenta
+                # las barras de cada pentagrama, así que la suma no cuadra. La app
+                # trabaja con hojas de UN pentagrama (como las de batería), y
+                # dividir por hoja no lo arregla → conviene decirlo claro. Se
+                # detecta por el nº real de pentagramas del .mscx, no por la
+                # proporción (un multi-hoja mal repartido también daría múltiplo).
+                if full.get("n_staves", 1) >= 2:
+                    raise ValueError(
+                        f"El archivo {s} tiene {full['n_staves']} pentagramas por "
+                        "sistema (piano, cuarteto, voces…). Esta app sincroniza "
+                        "hojas de UN solo pentagrama, como las de batería — una "
+                        "partitura multi-pentagrama no está soportada.")
                 raise ValueError(
                     f"El archivo {s} tiene {full['n_measures']} compases pero "
                     f"sus {len(pages)} hojas suman {sum(counts)} — no se puede "
