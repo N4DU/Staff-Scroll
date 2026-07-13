@@ -1510,7 +1510,101 @@ const ed = {
   finalize: document.getElementById("edFinalize"),
   skip:     document.getElementById("edSkip"),
 };
-const edAudio = new Audio();
+// Reproductor de audio con WebAudio. Un <audio> normal decodifica la canción
+// "bajo demanda": la primera vez que suena (y a veces al EMPALMAR la partitura
+// con la canción) el navegador inicializa su decodificador en pleno hilo de
+// pintado, lo que provoca un tirón de ~50-90 ms SÓLO en el simulador (el mp4
+// no lo sufre porque se renderiza offline). Medido y confirmado. La solución
+// de raíz es decodificar la canción UNA vez al abrir el editor y reproducirla
+// desde memoria con un reloj de muestra exacta: sin decodificado en vivo, sin
+// tirón. Este objeto imita la parte de la API de HTMLAudioElement que usa el
+// editor para ser un reemplazo directo (currentTime, play/pause/paused, muted,
+// playbackRate, src, readyState y los eventos 'canplay'/'ended').
+function makeAudio() {
+  let ctx = null, buffer = null, gain = null, node = null;
+  let paused = true;
+  let offset = 0;        // posición (s): fija en pausa, base del tramo en play
+  let startedAt = 0;     // ctx.currentTime del último arranque del nodo
+  let rate = 1, muted = false, readyState = 0;
+  const lst = {};
+  const fire = t => (lst[t] || []).slice().forEach(fn => { try { fn(); } catch (e) {} });
+  const ensureCtx = () => {
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      gain = ctx.createGain(); gain.gain.value = muted ? 0 : 1;
+      gain.connect(ctx.destination);
+    }
+    return ctx;
+  };
+  const now = () => paused ? offset : offset + (ctx.currentTime - startedAt) * rate;
+  // marca de "parada nuestra" EN el propio nodo: el onended de un nodo viejo
+  // llega asincrónico, así que el guardián no puede ser compartido (si no, una
+  // parada emitiría 'ended' falso y mataría al nodo nuevo).
+  const stopNode = () => {
+    if (node) { node._stopped = true; try { node.stop(); } catch (e) {}
+                try { node.disconnect(); } catch (e) {} node = null; }
+  };
+  const startNode = from => {
+    ensureCtx(); stopNode();
+    if (!buffer) return;
+    offset = Math.min(Math.max(from, 0), buffer.duration);
+    const n = ctx.createBufferSource();
+    n.buffer = buffer; n.playbackRate.value = rate; n.connect(gain);
+    n.onended = () => {
+      if (n._stopped || n !== node) return;   // parada nuestra o ya reemplazado
+      node = null; paused = true; offset = buffer.duration; fire("ended");
+    };
+    node = n; startedAt = ctx.currentTime;
+    n.start(0, offset);
+  };
+  return {
+    set preload(_) {},
+    get readyState() { return readyState; },
+    get duration() { return buffer ? buffer.duration : NaN; },
+    get paused() { return paused; },
+    get currentTime() { return now(); },
+    set currentTime(t) { t = +t || 0; if (paused) offset = t; else startNode(t); },
+    get muted() { return muted; },
+    set muted(m) { muted = !!m; if (gain) gain.gain.value = muted ? 0 : 1; },
+    get playbackRate() { return rate; },
+    set playbackRate(r) { r = +r || 1; if (paused) rate = r;
+                          else { const at = now(); rate = r; startNode(at); } },
+    set src(url) {
+      readyState = 0; buffer = null; paused = true; offset = 0; stopNode();
+      fetch(url).then(r => r.arrayBuffer())
+        .then(ab => { ensureCtx(); return ctx.decodeAudioData(ab); })
+        .then(buf => { buffer = buf; readyState = 4; fire("canplay"); })
+        .catch(() => {});
+    },
+    // asegura que el contexto esté activo (Chrome exige un gesto de usuario
+    // previo; abrir el editor y tocar ▶ lo son). Se llama al empezar a reproducir.
+    resume() { ensureCtx(); return ctx.state === "suspended" ? ctx.resume() : Promise.resolve(); },
+    play() {
+      ensureCtx();
+      const start = () => {
+        if (!buffer) throw new Error("audio no listo");
+        if (!paused) return;              // ya sonando: no reiniciar
+        startNode(offset >= buffer.duration ? 0 : offset); paused = false;
+      };
+      // si el contexto ya está activo (lo normal salvo el primerísimo play sin
+      // gesto), arrancar SÍNCRONO: sin esperar el microtask de resume() no hay
+      // ventana en la que 'paused' siga en true un instante.
+      const go = () => ctx.state === "running"
+        ? (start(), Promise.resolve())
+        : ctx.resume().then(start);
+      if (buffer) return go();
+      // aún decodificando: esperar a que esté listo y recién ahí arrancar
+      return new Promise((res, rej) => {
+        const on = () => { this.removeEventListener("canplay", on); go().then(res, rej); };
+        this.addEventListener("canplay", on);
+      });
+    },
+    pause() { if (paused) return; const at = now(); stopNode(); offset = at; paused = true; },
+    addEventListener(t, fn) { (lst[t] || (lst[t] = [])).push(fn); },
+    removeEventListener(t, fn) { if (lst[t]) lst[t] = lst[t].filter(f => f !== fn); },
+  };
+}
+const edAudio = makeAudio();
 edAudio.preload = "auto";
 
 let edData = null;
@@ -1630,7 +1724,7 @@ function openEditor(jobId) {
     edPrePlay = null; ed.play.innerHTML = "&#9654; Reproducir";
     ed.finalize.disabled = ed.skip.disabled = false;   // reintentos tras error
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
-    edAudio.src = `/audio/${jobId}`;
+    edAudio.src = `/audio/${jobId}`;   // decodifica la canción una vez (WebAudio)
     loadWaveEnvelope(jobId);
     buildBeatGrid();
     edPageImgs = {}; edPageBitmaps = {}; edFitKey = "";
@@ -2052,15 +2146,33 @@ function pulseHitAt(x, y) {
 // tocarlo). Devuelve el índice en edData.measures o -1.
 function measureAtSheet(x, y) {
   const L = edSheetLayout;
-  if (!L) return -1;
-  const xf = (x - L.ox) / Math.max(1e-6, L.pw);
-  const yf = L.b0 + ((y - L.oy) / Math.max(1e-6, L.ph)) * (L.b1 - L.b0);
+  if (!L || !edData) return -1;
+  // Las cajas de los compases (del SVG) son FINAS en vertical: sólo cubren la
+  // banda del pentagrama, no las cabezas/plicas que sobresalen ni el hueco
+  // entre sistemas. Exigir un acierto pixel-exacto hacía que "a veces" el clic
+  // no rebobinara (se caía en la zona muerta). Por eso: si el clic no cae DENTRO
+  // de ninguna caja, se rebobina al compás MÁS CERCANO de la página, siempre que
+  // esté razonablemente cerca (un clic en márgenes muy amplios no hace nada).
+  const boxPx = m => ({
+    l: L.ox + m.x0 * L.pw, r: L.ox + m.x1 * L.pw,
+    t: L.oy + ((m.y0 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph,
+    b: L.oy + ((m.y1 - L.b0) / Math.max(1e-6, L.b1 - L.b0)) * L.ph,
+  });
+  let best = -1, bestD = Infinity, sumH = 0, nH = 0;
   for (let i = 0; i < edData.measures.length; i++) {
     const m = edData.measures[i];
-    if (m.page === edCurPage &&
-        xf >= m.x0 && xf <= m.x1 && yf >= m.y0 && yf <= m.y1) return i;
-  }
-  return -1;
+    if (m.page !== edCurPage) continue;
+    const r = boxPx(m);
+    sumH += r.b - r.t; nH++;
+    const dx = Math.max(r.l - x, 0, x - r.r);   // distancia (px) del clic a la caja
+    const dy = Math.max(r.t - y, 0, y - r.b);   // (0 si está dentro)
+    const d = Math.hypot(dx, dy);
+    if (d < bestD) { bestD = d; best = i; }     // estricto: entre cajas iguales
+  }                                             // (repeticiones) gana la primera
+  if (best < 0) return -1;
+  if (bestD === 0) return best;                 // clic dentro de un compás
+  const avgH = nH ? sumH / nH : 20;
+  return bestD <= Math.max(28, 1.6 * avgH) ? best : -1;
 }
 
 // pan de la hoja (con zoom) — o selección/arrastre de pulsos en modo [D]
@@ -2409,6 +2521,7 @@ function tick() {
   edRAF = requestAnimationFrame(tick);
 }
 function playFromSig(sig) {
+  edAudio.resume();            // activar el contexto de audio (gesto del usuario)
   edFollow = true;
   const [lo, hi] = sigBounds();
   edCursor = Math.min(Math.max(sig, lo), hi);
