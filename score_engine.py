@@ -286,14 +286,40 @@ def _voice_onsets(voice_el, measure_beats):
     """Instantes de ataque (en negras desde el inicio del compás) de una voz.
 
     Devuelve (onsets, duración_total) o None si la voz no se puede
-    interpretar con seguridad (tuplets, duraciones desconocidas, o se pasa
-    del largo del compás). Las voces PUEDEN ser más cortas que el compás
-    (MuseScore lo permite) y pueden saltar tiempo con <location>.
+    interpretar con seguridad (duraciones desconocidas o se pasa del largo del
+    compás). Las voces PUEDEN ser más cortas que el compás (MuseScore lo
+    permite) y pueden saltar tiempo con <location>.
+
+    Tuplets (tresillos, etc.): entre <Tuplet> y <endTuplet/> las duraciones se
+    escalan por normalNotes/actualNotes (p. ej. un tresillo 3:2 → cada figura
+    dura 2/3). El chequeo de cobertura (t == beats) valida de yapa la cuenta:
+    si el escalado saliera mal, la voz no cerraría el compás y se descarta,
+    cayendo al reparto uniforme (nunca a pulsos mal ubicados).
     """
-    if voice_el.find('.//Tuplet') is not None:
-        return None
     t, onsets = 0.0, []
+    tup_stack = []   # factores normal/actual de los tuplets abiertos (anidables)
+    scale = 1.0
     for ch in voice_el:
+        if ch.tag == "Tuplet":
+            na, nn = ch.find("actualNotes"), ch.find("normalNotes")
+            try:
+                a, n = int(na.text), int(nn.text)
+                if a <= 0 or n <= 0:
+                    return None
+                tup_stack.append(n / a)
+            except (AttributeError, TypeError, ValueError):
+                return None
+            scale = 1.0
+            for f in tup_stack:
+                scale *= f
+            continue
+        if ch.tag == "endTuplet":
+            if tup_stack:
+                tup_stack.pop()
+            scale = 1.0
+            for f in tup_stack:
+                scale *= f
+            continue
         if ch.tag == "location":
             # salto de cursor sin contenido: <location><fractions>1/4</fractions>
             fr = ch.find("fractions")
@@ -322,6 +348,7 @@ def _voice_onsets(voice_el, measure_beats):
             dots = ch.find("dots")
             nd = int(dots.text) if dots is not None and dots.text else 0
             beats *= (2.0 - 0.5 ** nd)
+        beats *= scale                    # dentro de un tuplet, figura acortada
         onsets.append(round(t, 4))
         t += beats
     if t > measure_beats + 1e-4:
