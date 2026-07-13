@@ -1947,8 +1947,13 @@ function drawSheet() {
           }
         }
       } else {
-        ctx.strokeStyle = "rgba(230,40,40,0.8)";
+        // sin pulsos: gris tenue si es un compás VACÍO (silencio entero → no
+        // hay golpes que marcar, es normal); rojo sólo si tenía notas y el
+        // emparejado falló de verdad (ahí sí conviene mirarlo)
+        ctx.strokeStyle = mm.empty ? "rgba(150,150,150,0.45)" : "rgba(230,40,40,0.8)";
+        ctx.setLineDash(mm.empty ? [5, 4] : []);
         ctx.strokeRect(px(mm.x0), py(mm.y0), px(mm.x1) - px(mm.x0), py(mm.y1) - py(mm.y0));
+        ctx.setLineDash([]);
       }
     });
   }
