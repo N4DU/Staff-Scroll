@@ -861,8 +861,8 @@ body {
     <canvas id="edTracks"></canvas>
     <div class="ed-wave-hint">
       Arrastra la banda de la <b style="color:var(--orange)">partitura</b> (arriba) o de la <b style="color:#5ac8ff">canci&oacute;n</b> (abajo) para alinearlas &middot;
-      arrastra la <b>l&iacute;nea blanca</b> para moverla (se ajusta a los tiempos) &middot; clic = mover el cursor &middot; rueda = zoom &middot;
-      <kbd>Espacio</kbd> reproducir/pausar desde la l&iacute;nea blanca &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> afinar la canci&oacute;n &plusmn;10&nbsp;ms (<kbd>Shift</kbd> = 1&nbsp;ms) &middot;
+      arrastra la <b>l&iacute;nea blanca</b> para moverla (se ajusta a los tiempos) &middot; clic (o clic derecho) = mover el cursor &middot; clic en un comp&aacute;s de la partitura = rebobinar ah&iacute; &middot; rueda = zoom &middot;
+      <kbd>Espacio</kbd> reproducir/pausar &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> retroceder/avanzar un pulso (<kbd>Shift</kbd> = afinar la canci&oacute;n &plusmn;10&nbsp;ms) &middot;
       <kbd>D</kbd> diagn&oacute;stico: compases y pulsos (selecciona un pulso y usa ✏ Corregir para ajustarlo)
     </div>
   </div>
@@ -1536,6 +1536,7 @@ let edUnlocked = false;           // 🔓 todos los pulsos móviles a la vez
 // zoom/pan de la HOJA (independiente del zoom de las tiras)
 let edSheetZoom = 1, edSheetPanX = 0, edSheetPanY = 0;
 let edSheetDrag = null;
+let edSheetClick = null;   // clic (sin arrastre) sobre la hoja → rebobinar al compás
 let edSheetSharp = false;         // ¿el bg ya está compuesto desde el original (nítido)?
 let edSharpTimer = null;
 
@@ -1662,7 +1663,7 @@ function closeEditor() {
   if (edRAF) { cancelAnimationFrame(edRAF); edRAF = null; }
   // soltar cualquier arrastre en curso: un mouseup posterior no debe tocar
   // el estado del editor ya cerrado (ni contaminar el próximo trabajo)
-  edDrag = edPulseDrag = edSheetDrag = null;
+  edDrag = edPulseDrag = edSheetDrag = edSheetClick = null;
   edPrePlay = null;
   ed.tracks.classList.remove("dragging");
   ed.sheet.classList.remove("panning");
@@ -1863,10 +1864,12 @@ function drawSheet() {
   const m = measureAt(tau);
   if (!m || m.page !== edCurPage) return;
   const nb = Math.max(1, Math.round(m.beats));
-  // +0.05 de tolerancia: si el cursor quedó un pelo ANTES del tiempo (error de
-  // flotantes al imantar, o colocado a mano apenas atrás), se muestra ESE
-  // tiempo y no el anterior.
-  const bi = Math.min(nb - 1, Math.max(0, Math.floor((tau - m.t) / m.dur * nb + 0.05)));
+  // Tolerancia MÍNIMA (1e-6), la misma que usa el motor del video: sólo
+  // corrige el error de redondeo de flotantes al imantar. Con la tolerancia
+  // anterior (0.05) la línea amarilla del editor se adelantaba ~25 ms al
+  // pulso, así que la alineación "a ojo" quedaba corrida ese cachito respecto
+  // al video final. Ahora el editor muestra EXACTAMENTE lo que saldrá.
+  const bi = Math.min(nb - 1, Math.max(0, Math.floor((tau - m.t) / m.dur * nb + 1e-6)));
   const bpos = bi * m.beats / nb;
   let xf;
   if (m.hx && m.hx.length) {
@@ -2038,6 +2041,21 @@ function pulseHitAt(x, y) {
   return best;
 }
 
+// Compás de la página actual bajo un punto de la hoja (para rebobinar al
+// tocarlo). Devuelve el índice en edData.measures o -1.
+function measureAtSheet(x, y) {
+  const L = edSheetLayout;
+  if (!L) return -1;
+  const xf = (x - L.ox) / Math.max(1e-6, L.pw);
+  const yf = L.b0 + ((y - L.oy) / Math.max(1e-6, L.ph)) * (L.b1 - L.b0);
+  for (let i = 0; i < edData.measures.length; i++) {
+    const m = edData.measures[i];
+    if (m.page === edCurPage &&
+        xf >= m.x0 && xf <= m.x1 && yf >= m.y0 && yf <= m.y1) return i;
+  }
+  return -1;
+}
+
 // pan de la hoja (con zoom) — o selección/arrastre de pulsos en modo [D]
 ed.sheet.addEventListener("mousedown", e => {
   const rect = ed.sheet.getBoundingClientRect();
@@ -2067,7 +2085,13 @@ ed.sheet.addEventListener("mousedown", e => {
     edSel = null;
     drawSheet();
   }
-  if (edSheetZoom <= 1.001) { e.preventDefault(); return; }
+  if (edSheetZoom <= 1.001) {
+    // vista normal (sin zoom ni modo D): un clic sobre un compás rebobina
+    // hasta ahí, conservando el estado de reproducción
+    if (!edDiag) edSheetClick = { x: e.clientX, y: e.clientY, moved: false };
+    e.preventDefault();
+    return;
+  }
   edSheetDrag = { x: e.clientX, y: e.clientY, px: edSheetPanX, py: edSheetPanY };
   ed.sheet.classList.add("panning");
   e.preventDefault();
@@ -2117,9 +2141,17 @@ window.addEventListener("mousemove", e => {
   drawSheet();
   scheduleSharpen();
 });
-window.addEventListener("mouseup", () => {
+window.addEventListener("mouseup", e => {
   edPulseDrag = null;
   if (edSheetDrag) { edSheetDrag = null; ed.sheet.classList.remove("panning"); }
+  if (edSheetClick) {
+    const c = edSheetClick; edSheetClick = null;
+    if (Math.abs(e.clientX - c.x) < 5 && Math.abs(e.clientY - c.y) < 5) {
+      const rect = ed.sheet.getBoundingClientRect();
+      const mi = measureAtSheet(e.clientX - rect.left, e.clientY - rect.top);
+      if (mi >= 0) goToSig(edS + edData.measures[mi].t);   // rebobinar al compás
+    }
+  }
 });
 
 // pantalla completa = "partitura al máximo": oculta todo el editor y escala
@@ -2382,10 +2414,15 @@ function playFromSig(sig) {
     if (!edRAF) edRAF = requestAnimationFrame(tick);
     return;
   }
-  edAudio.currentTime = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
+  const target = Math.min(Math.max(edCursor - edA, 0), edData.audio.duration - 0.1);
+  // sólo re-posicionar el audio si hace falta: reasignar currentTime dispara
+  // un re-seek (con su latencia). Al reanudar en el mismo punto (Espacio para
+  // play/pausa) evitarlo hace que reaccione al instante.
+  if (Math.abs(edAudio.currentTime - target) > 0.03) edAudio.currentTime = target;
   edAudio.play().then(() => {
     if (!edRAF) edRAF = requestAnimationFrame(tick);
   }).catch(() => { ed.play.innerHTML = "&#9654; Reproducir"; });
+  if (!edRAF) edRAF = requestAnimationFrame(tick);   // el cursor responde ya
 }
 function pauseAll() {
   edPrePlay = null;
@@ -2413,6 +2450,9 @@ ed.play.addEventListener("click", () => {
 ed.toStart.addEventListener("click", () => {
   const lo = sigBounds()[0];
   edFollow = true;
+  // volver a la primera página: durante el conteo previo activePage no cambia
+  // sola (aún no hay compás), así que la fijamos explícitamente
+  if (edCurPage !== edData.pages[0]) { edCurPage = edData.pages[0]; edSheetKey = ""; }
   if (isPlaying()) playFromSig(lo);
   else { seekToSig(lo, false); updateAll(); }
 });
@@ -2440,6 +2480,28 @@ function seekToSig(sig, magnet) {
       edPrePlay = { t0: performance.now(), sig0: edCursor };
     }
   }
+}
+
+// Ir a un punto σ conservando el estado de reproducción (si sonaba, sigue
+// sonando desde el destino; si estaba en pausa, sólo mueve la línea blanca).
+function goToSig(sig) {
+  edFollow = true;
+  if (isPlaying()) playFromSig(sig);
+  else { seekToSig(sig, false); updateAll(); }
+}
+
+// ←/→ : adelantar o retrasar UN pulso, sin pausar. Se toma el pulso de la
+// grilla más cercano a la posición actual y se avanza `delta` pulsos.
+function seekByBeats(delta) {
+  if (!edBeats.length) return;
+  const tau = curMusic();
+  let idx = 0, best = Infinity;
+  for (let i = 0; i < edBeats.length; i++) {
+    const d = Math.abs(edBeats[i] - tau);
+    if (d < best) { best = d; idx = i; }
+  }
+  idx = Math.min(edBeats.length - 1, Math.max(0, idx + delta));
+  goToSig(edS + edBeats[idx]);
 }
 
 // ── interacción con las tiras ────────────────────────────────────────────────
@@ -2512,6 +2574,10 @@ ed.tracks.addEventListener("wheel", e => {
   const rect = ed.tracks.getBoundingClientRect();
   zoomAt(e.deltaY < 0 ? 1.3 : 1 / 1.3, e.clientX - rect.left);
 }, { passive: false });
+// clic derecho sobre las tiras / la hoja mueve la línea blanca (vía mouseup);
+// se evita que además salte el menú contextual del navegador
+ed.tracks.addEventListener("contextmenu", e => e.preventDefault());
+ed.sheet.addEventListener("contextmenu", e => e.preventDefault());
 ed.zoomIn.addEventListener("click",  () => zoomAt(1.5, ed.tracks.clientWidth / 2));
 ed.zoomOut.addEventListener("click", () => zoomAt(1 / 1.5, ed.tracks.clientWidth / 2));
 ed.zoomAll.addEventListener("click", fitAll);
@@ -2531,10 +2597,15 @@ document.addEventListener("keydown", e => {
   if (e.code === "Space") { e.preventDefault(); ed.play.click(); }
   else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
-    const step = (e.shiftKey ? 1 : 10) / 1000;
-    edA += (e.key === "ArrowRight" ? step : -step);
-    edTracksKey = "";
-    updateAll();
+    if (e.shiftKey) {
+      // Shift+flecha: ajuste fino de la alineación del audio (±10 ms)
+      edA += (e.key === "ArrowRight" ? 0.01 : -0.01);
+      edTracksKey = "";
+      updateAll();
+    } else {
+      // flecha sola: retrasar / adelantar un pulso, sin pausar
+      seekByBeats(e.key === "ArrowRight" ? 1 : -1);
+    }
   }
   else if (e.key === "d" || e.key === "D") {
     edDiag = !edDiag;
