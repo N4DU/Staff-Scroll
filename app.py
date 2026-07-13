@@ -668,6 +668,10 @@ def _build_editor_data(engine, analysis):
         si, x0, x1 = engine.measure_map[fn][mi]
         lay = engine.layouts[fn]
         bmap = engine.beat_x_map[fn][mi]
+        # compás "vacío" para el diagnóstico: ≤1 ataque (silencio de compás
+        # entero) → no hay golpes que marcar, la falta de pulsos es NORMAL (no
+        # un fallo). Es la misma condición por la que el motor no arma bmap.
+        n_onsets = len(engine.score_data[fn]["measures"][mi].get("onsets") or [])
         measures.append({
             "t": round(t - lead, 4), "dur": round(dur, 4),
             "page": fn, "beats": beats, "bpm": bpm,
@@ -681,6 +685,7 @@ def _build_editor_data(engine, analysis):
             # ataques reales: [posición en negras, x como fracción de la hoja]
             "hx": ([[round(b, 4), round(x / lay["w"], 4)] for b, x in bmap]
                    if bmap else None),
+            "empty": n_onsets < 2,   # sin pulsos por ser silencio, no por fallo
         })
     # Relación ancho/alto de la hoja (píxeles del PNG) → el editor puede
     # dimensionar el lienzo de la partitura antes de que la imagen decodifique,
