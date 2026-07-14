@@ -8,6 +8,15 @@ dist/
 
 # Herramientas de desarrollo
 .claude/
+.vscode/
+
+# Editores / Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Backups de MuseScore (autoguardado)
+.mscbackup/
+*.mscz~
 
 # Archivos temporales
 *.log
