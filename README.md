@@ -64,3 +64,16 @@ Para generar un ejecutable con PyInstaller:
 ```bash
 pyinstaller build.spec
 ```
+
+## Licencia
+
+Copyright (C) 2026 **N4DU**
+
+Scrolling Score es software libre bajo la **GNU Affero General Public License
+v3.0 (AGPL-3.0)** — ver [`LICENSE`](LICENSE). Podés usarlo, estudiarlo,
+modificarlo y compartirlo libremente; pero si distribuís una versión modificada
+**o la ofrecés como servicio en red**, tenés que publicar tu código fuente bajo
+esta misma licencia. Se entrega sin ninguna garantía.
+
+> `vendor/ffmpeg.exe` se distribuye bajo su propia licencia (FFmpeg, LGPL/GPL),
+> independiente de la de este proyecto.
