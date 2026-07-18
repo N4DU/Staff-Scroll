@@ -675,7 +675,7 @@ body {
     <div class="dz-icon">&#9835;</div>
     <div class="dz-title">Arrastra tus archivos .mscz aqu&iacute;</div>
     <div class="dz-sub">o <span class="dz-link" id="dzLink">haz clic para seleccionarlos</span></div>
-    <div class="dz-proj">&#128193; tambi&eacute;n pod&eacute;s abrir un proyecto guardado (<b>.sscroll</b>)</div>
+    <div class="dz-proj">&#128193; o abre un proyecto guardado (<b>.sscroll</b>) para continuar donde quedaste</div>
     <input type="file" id="fileInput" accept=".mscz,.sscroll" multiple style="display:none">
   </div>
 
@@ -1029,8 +1029,8 @@ function addFiles(newFiles) {
   const projs = newFiles.filter(f => f.name.toLowerCase().endsWith(".sscroll"));
   if (projs.length > 0) {
     if (projs.length > 1 || newFiles.length > 1) {
-      showError("Selección inválida: un proyecto .sscroll ya contiene las " +
-                "partituras y el audio — abrilo solo, sin mezclarlo con otros archivos.");
+      showError("Selección no válida: el proyecto .sscroll ya contiene las " +
+                "partituras y el audio. Ábrelo por separado, sin combinarlo con otros archivos.");
       return;
     }
     openProjectFile(projs[0]);
