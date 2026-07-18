@@ -41,13 +41,16 @@ Se abre solo el navegador en **http://localhost:5173**. Desde ahí:
 
 ### Proyectos (`.sscroll`)
 
-Desde el editor, **💾 Guardar proyecto** descarga un único archivo `.sscroll`
-autocontenido: las partituras, el audio, la configuración, la alineación y las
-correcciones de pulsos. Para retomar el trabajo (o seguirlo en otra
-computadora), arrastrá ese archivo a la pantalla de inicio: todo vuelve a
-quedar exactamente como lo dejaste — ajustás lo que quieras (por ejemplo la
-resolución) y volvés a generar, sin realinear nada. La sincronización guardada
-es independiente de la resolución.
+Al terminar de sincronizar, el botón **✓ Listo** del editor abre las opciones
+de salida. La casilla **«Guardar también el proyecto»** viene siempre marcada:
+junto con el video se descarga un único archivo `.sscroll` (con el nombre de
+la canción) que contiene las partituras, el audio, la configuración, la
+alineación y las correcciones de pulsos.
+
+Para retomar el trabajo (o seguirlo en otra computadora), arrastrá ese
+`.sscroll` a la pantalla de inicio: se abre **directo el editor**, exactamente
+como quedó al guardarlo — ajustás lo que quieras y volvés a generar, sin
+realinear nada. La sincronización guardada es independiente de la resolución.
 
 > Está pensado para **hojas de un solo pentagrama** (como las de batería). Las
 > partituras multi-pentagrama (piano, cuarteto, coro) no están soportadas y se

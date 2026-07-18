@@ -540,6 +540,25 @@ body {
 .ed-top h2 { font-size: 1.15rem; color: var(--orange); }
 .ed-top .ed-song { color: var(--muted); font-size: 0.9rem; }
 .ed-actions { display: flex; gap: 10px; }
+/* «Listo» → panelcito flotante con las opciones de salida */
+.ed-done-wrap { position: relative; }
+.ed-done-pop {
+  display: none; position: absolute; right: 0; top: calc(100% + 10px);
+  z-index: 80; width: 300px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px;
+  box-shadow: 0 12px 34px rgba(0,0,0,0.55);
+  flex-direction: column; gap: 10px;
+}
+.ed-done-pop.open { display: flex; }
+.ed-done-pop .ed-btn { width: 100%; text-align: center; }
+.ed-done-save {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.84rem; color: var(--text); cursor: pointer;
+  padding: 4px 2px 8px; border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.ed-done-save input { accent-color: var(--orange); width: 15px; height: 15px; }
 .ed-btn {
   padding: 10px 18px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text); font-size: 0.9rem;
@@ -887,9 +906,17 @@ body {
       <div class="ed-song" id="edSongName"></div>
     </div>
     <div class="ed-actions">
-      <button class="ed-btn" id="edSaveProj" type="button" title="Guarda un archivo .sscroll con las partituras, el audio, la configuraci&oacute;n y toda la sincronizaci&oacute;n — para reabrirlo despu&eacute;s y ajustar sin empezar de cero">&#128190; Guardar proyecto</button>
-      <button class="ed-btn" id="edSkip" type="button">Continuar sin audio</button>
-      <button class="ed-btn primary" id="edFinalize" type="button">&#10003; Generar video con audio</button>
+      <div class="ed-done-wrap">
+        <button class="ed-btn primary" id="edDone" type="button">&#10003; Listo</button>
+        <div class="ed-done-pop" id="edDonePop">
+          <label class="ed-done-save" title="Adem&aacute;s del video se descarga un archivo .sscroll con las partituras, el audio y toda la sincronizaci&oacute;n — para reabrir el trabajo despu&eacute;s sin empezar de cero">
+            <input type="checkbox" id="edSaveChk" checked>
+            <span>&#128190; Guardar tambi&eacute;n el proyecto (.sscroll)</span>
+          </label>
+          <button class="ed-btn primary" id="edFinalize" type="button">&#10003; Generar video con audio</button>
+          <button class="ed-btn" id="edSkip" type="button">Continuar sin audio</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -996,9 +1023,19 @@ dzLink.addEventListener("click", e => { e.stopPropagation(); fileInput.click(); 
 fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
 
 function addFiles(newFiles) {
-  // Un .sscroll es un PROYECTO completo: se abre y reemplaza la selección
-  const proj = newFiles.find(f => f.name.toLowerCase().endsWith(".sscroll"));
-  if (proj) { openProjectFile(proj); return; }
+  // Un .sscroll es un PROYECTO completo: va SOLO. Mezclarlo con otros
+  // archivos (u otro proyecto) es casi seguro un error de selección — mejor
+  // avisar claro que adivinar qué quiso el usuario.
+  const projs = newFiles.filter(f => f.name.toLowerCase().endsWith(".sscroll"));
+  if (projs.length > 0) {
+    if (projs.length > 1 || newFiles.length > 1) {
+      showError("Selección inválida: un proyecto .sscroll ya contiene las " +
+                "partituras y el audio — abrilo solo, sin mezclarlo con otros archivos.");
+      return;
+    }
+    openProjectFile(projs[0]);
+    return;
+  }
   // Si sueltan un audio en la zona principal, lo mandamos al slot de audio
   const audios = newFiles.filter(f => AUDIO_EXT_RE.test(f.name));
   if (audios.length > 0) setAudioFile(audios[0]);
@@ -1048,6 +1085,9 @@ async function openProjectFile(f) {
     audioFilename.style.display = "";
     audioDesc.style.display = "none";
   }
+  // directo al editor: el proyecto ya trae todo (partituras, audio, config y
+  // sincronización) — se abre calcado a como se guardó, listo para ajustar
+  btnGenerate.click();
 }
 
 // ─── audio slot ──────────────────────────────────────────────────────────────
@@ -1540,9 +1580,16 @@ function listenProgress(jobId) {
 function showDownload(jobId) {
   btnDownload.href    = `/download/${jobId}`;
   btnDownload.classList.add("visible");
+  btnDownload.textContent = projSaveWanted
+    ? "⭳ Descargar el video + el proyecto" : "⭳ Descargar el video";
   btnReset.classList.add("visible");
   btnGenerate.style.display = "none";
 }
+// si en «Listo» quedó marcada la casilla, junto con el video baja el .sscroll
+// (el estado del editor sigue en memoria: la sincronización es la exportada)
+btnDownload.addEventListener("click", () => {
+  if (projSaveWanted && currentJobId) saveProjectFile().catch(() => {});
+});
 
 btnReset.addEventListener("click", () => {
   files         = [];
@@ -1550,6 +1597,7 @@ btnReset.addEventListener("click", () => {
   hadEditor     = false;
   projectLoaded = false;
   projectState  = null;
+  projSaveWanted = false;
   if (evtSource) { evtSource.close(); evtSource = null; }
   clearAudioFile();
   closeEditor();
@@ -1854,6 +1902,7 @@ function openEditor(jobId) {
     ed.unlock.classList.remove("danger");
     edPrePlay = null; ed.play.innerHTML = "&#9654; Reproducir";
     ed.finalize.disabled = ed.skip.disabled = false;   // reintentos tras error
+    projSaveWanted = false; edDonePop.classList.remove("open");
     edSheetZoom = 1; edSheetPanX = 0; edSheetPanY = 0;
     edAudio.src = `/audio/${jobId}`;   // decodifica la canción una vez (WebAudio)
     loadWaveEnvelope(jobId);
@@ -2929,40 +2978,56 @@ function pulseFixList() {
     return { i, k, x };
   });
 }
-ed.finalize.addEventListener("click", () => submitFinalize({
-  offset: offset(), stretch: 1.0, pulse_fixes: pulseFixList() }));
-ed.skip.addEventListener("click",     () => submitFinalize({
-  skip: true, pulse_fixes: pulseFixList() }));
-// 💾 Guardar proyecto: baja un .sscroll autocontenido (partituras + audio +
-// configuración + alineación + pulsos). Reabrirlo deja todo como está ahora.
-document.getElementById("edSaveProj").addEventListener("click", async () => {
-  const btn = document.getElementById("edSaveProj");
-  const prev = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = "Guardando…";
-  try {
-    const r = await fetch(`/project/${currentJobId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings: gatherSettings(), offset: offset(),
-                             pulse_fixes: pulseFixList() }),
-    });
-    if (!r.ok) throw new Error((await r.json()).error || "error del servidor");
-    const blob = await r.blob();
-    const cd = r.headers.get("Content-Disposition") || "";
-    const m = /filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(cd);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = m ? decodeURIComponent(m[1]) : "proyecto.sscroll";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    btn.innerHTML = "&#10003; Guardado";
-    setTimeout(() => { btn.innerHTML = prev; btn.disabled = false; }, 1800);
-  } catch (err) {
-    // el error se muestra EN el botón: el editor tapa la caja de errores
-    btn.innerHTML = "&#10007; No se pudo guardar";
-    setTimeout(() => { btn.innerHTML = prev; btn.disabled = false; }, 2500);
-  }
+ed.finalize.addEventListener("click", () => {
+  projSaveWanted = edSaveChk.checked;
+  edDonePop.classList.remove("open");
+  submitFinalize({ offset: offset(), stretch: 1.0, pulse_fixes: pulseFixList() });
 });
+ed.skip.addEventListener("click", () => {
+  projSaveWanted = edSaveChk.checked;
+  edDonePop.classList.remove("open");
+  submitFinalize({ skip: true, pulse_fixes: pulseFixList() });
+});
+// ── «Listo» → panel con las opciones de salida ──────────────────────────────
+// La casilla de guardar proyecto SIEMPRE abre marcada (desmarcala cada vez si
+// no la querés): perder la sincronización por un descuido sería grave; un
+// .sscroll de más no molesta a nadie.
+const edDone    = document.getElementById("edDone");
+const edDonePop = document.getElementById("edDonePop");
+const edSaveChk = document.getElementById("edSaveChk");
+let projSaveWanted = false;   // capturado al confirmar: baja junto con el video
+edDone.addEventListener("click", e => {
+  e.stopPropagation();
+  const opening = !edDonePop.classList.contains("open");
+  edDonePop.classList.toggle("open", opening);
+  if (opening) edSaveChk.checked = true;
+});
+document.addEventListener("click", e => {
+  if (edDonePop.classList.contains("open") && !edDonePop.contains(e.target) &&
+      e.target !== edDone) edDonePop.classList.remove("open");
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") edDonePop.classList.remove("open");
+});
+
+// Descarga el .sscroll del trabajo actual (partituras + audio + sincronización)
+async function saveProjectFile() {
+  const r = await fetch(`/project/${currentJobId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings: gatherSettings(), offset: offset(),
+                           pulse_fixes: pulseFixList() }),
+  });
+  if (!r.ok) throw new Error((await r.json()).error || "error del servidor");
+  const blob = await r.blob();
+  const cd = r.headers.get("Content-Disposition") || "";
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(cd);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = m ? decodeURIComponent(m[1]) : "proyecto.sscroll";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
 
 window.addEventListener("resize", () => {
   if (edData) { edSheetKey = edTracksKey = ""; resizeTracks(); drawTracks(); drawSheet(); }
