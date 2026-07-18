@@ -1199,9 +1199,13 @@ function renderFileList() {
     item.innerHTML = `
       <span class="file-handle" title="Arrastra para reordenar">&#8801;</span>
       <span class="file-num">${i + 1}</span>
-      <span class="file-name" title="${f.name}">${f.name}</span>
+      <span class="file-name"></span>
       ${f.__project ? "" : `<button class="file-remove" data-idx="${i}" title="Quitar">&times;</button>`}
     `;
+    // el nombre va por textContent: un archivo llamado "<img …>.mscz" debe
+    // MOSTRARSE tal cual, nunca interpretarse como HTML
+    const nameEl = item.querySelector(".file-name");
+    nameEl.textContent = f.name; nameEl.title = f.name;
     if (f.__project) item.querySelector(".file-handle").style.visibility = "hidden";
     fileList.appendChild(item);
   });
@@ -1633,8 +1637,21 @@ function showDownload(jobId) {
   btnGenerate.style.display = "none";
 }
 // si en «Listo» quedó marcada la casilla, junto con el video baja el .sscroll
-// (el estado del editor sigue en memoria: la sincronización es la exportada)
-btnDownload.addEventListener("click", () => {
+// (el estado del editor sigue en memoria: la sincronización es la exportada).
+// La descarga se verifica ANTES de navegar: si el trabajo ya se limpió del
+// servidor (pasó el tiempo de gracia), un clic tardío mostraría una página de
+// error JSON y se perdería la aplicación — mejor avisar y quedarse.
+btnDownload.addEventListener("click", async e => {
+  e.preventDefault();
+  try {
+    const probe = await fetch(btnDownload.href, { method: "HEAD" });
+    if (!probe.ok) throw new Error();
+  } catch (err) {
+    showError("El video ya no está disponible en el servidor (los archivos " +
+              "temporales se limpiaron). Genera el video de nuevo.");
+    return;
+  }
+  window.location.assign(btnDownload.href);   // descarga sin salir de la app
   if (projSaveWanted && currentJobId) saveProjectFile().catch(() => {});
 });
 
