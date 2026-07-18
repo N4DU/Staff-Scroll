@@ -2,99 +2,146 @@
   <img src="docs/banner.png" alt="Project by N4DU — with Fable 5" width="720">
 </p>
 
-# ♪ Scrolling Score
+<h1 align="center">♪ Scrolling Score</h1>
 
-Convierte partituras de batería de **MuseScore** en un **video con scroll**
-sincronizado al audio real de la canción, con un **editor de sincronización**
-que corre en el navegador.
+<p align="center">
+  Convierte partituras de batería de <b>MuseScore</b> en <b>videos con scroll
+  sincronizados al audio real</b> de la canción — con un editor visual para
+  clavar la sincronización golpe a golpe.
+</p>
 
-Se cargan las hojas de la partitura (`.mscz`) y el audio de la canción; la app las
-renderiza con MuseScore, detecta los golpes del audio y arma un video donde una
-línea lectora recorre la partitura al ritmo de la música. Antes de exportar,
-la sincronización puede ajustarse a mano en un editor visual.
-
-> **In English:** Scrolling Score turns **MuseScore drum sheet music** (`.mscz`)
-> into a **scrolling sheet-music video synchronized with the real song audio**
-> — a play-along / practice video where a playhead follows the score in time
-> with the recording. It includes a browser-based sync editor (beat-accurate
-> alignment, per-note fine-tuning) and exports MP4. Local Flask app; AGPL-3.0.
+<p align="center">
+  <a href="LICENSE"><img alt="Licencia AGPL-3.0" src="https://img.shields.io/badge/licencia-AGPL--3.0-orange"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue">
+  <img alt="MuseScore 3 / 4" src="https://img.shields.io/badge/MuseScore-3%20%7C%204-lightgrey">
+</p>
 
 ---
 
+> **In English:** Scrolling Score turns **MuseScore drum sheet music** (`.mscz`)
+> into a **scrolling sheet-music video synchronized with the real song audio** —
+> a play-along / practice video where a playhead follows the score in time with
+> the recording. It includes a browser-based sync editor (beat-accurate
+> alignment, per-note fine-tuning) and exports MP4. Local Flask app; AGPL-3.0.
+
+## ¿Qué hace?
+
+Practicar batería leyendo partitura mientras suena la canción real es
+incómodo: hay que pasar páginas, no se sabe en qué compás va la música, y los
+videos de "sheet music" hechos a mano nunca quedan bien sincronizados.
+
+Scrolling Score lo automatiza: se cargan las hojas (`.mscz`) y el audio, la
+aplicación renderiza la partitura con MuseScore, analiza los golpes de la
+canción y produce un **MP4** donde una línea lectora recorre la partitura al
+ritmo exacto de la grabación. Antes de exportar, un **editor de
+sincronización** permite alinear y afinar todo a mano.
+
+| Pantalla de inicio | Editor de sincronización |
+|---|---|
+| ![Pantalla de inicio](docs/captura-inicio.png) | ![Editor de sincronización](docs/captura-editor.png) |
+
+### Características
+
+- **Sincronización golpe a golpe** — la posición de cada ataque se lee del
+  engraving real de MuseScore (SVG), no de un reparto uniforme del compás.
+- **Editor visual en el navegador** — dos tiras de tiempo (partitura y
+  canción) para alinear arrastrando, con forma de onda de alta resolución,
+  imán a los pulsos y reproducción instantánea (audio pre-decodificado).
+- **Modo diagnóstico `[D]`** — muestra compases y pulsos detectados sobre la
+  hoja y permite corregir la posición de cualquier pulso individual.
+- **Proyectos `.sscroll`** — todo el trabajo (hojas, audio, configuración y
+  sincronización) viaja en un único archivo reabrible y compartible.
+- **Configurable** — resolución (hasta 4K), estilo y posición de la línea
+  lectora (continua o por tiempos), conteo previo, recorte entre páginas,
+  perfiles de configuración con nombre y valores predeterminados propios.
+- **Soporta** repeticiones y casillas (voltas), cambios de tempo y de compás,
+  métricas compuestas (6/8…), tresillos, archivos de una o varias hojas, y
+  partituras de MuseScore 2, 3 y 4.
+
 ## Requisitos
 
-- **Python 3.10+**
-- **MuseScore 3 o 4** instalado (la app lo busca en las rutas estándar; en
-  Windows también puede dejarse en `vendor/`; ver `vendor/README.txt`).
-- **ffmpeg** en el `PATH` (en Windows puede dejarse en `vendor/ffmpeg.exe`).
+| Requisito | Detalle |
+|---|---|
+| **Python 3.10+** | con `pip install -r requirements.txt` (Flask, NumPy, Pillow) |
+| **MuseScore 3 o 4** | se busca en las rutas estándar; en Windows también puede dejarse en `vendor/` (ver `vendor/README.txt`) |
+| **ffmpeg** | en el `PATH`; en Windows puede dejarse en `vendor/ffmpeg.exe` |
 
-Dependencias de Python:
-
-```bash
-pip install -r requirements.txt
-```
-
-## Cómo se usa
+## Uso
 
 ```bash
 python main.py
 ```
 
-Se abre solo el navegador en **http://localhost:5173**. Desde ahí:
+El navegador se abre solo en **http://localhost:5173**.
 
-1. Sube las hojas de la partitura en `.mscz` (una hoja por archivo, o un
-   archivo con varias páginas) y el audio de la canción.
-2. La app renderiza las hojas y analiza el audio.
-3. En el **editor** alinea la partitura con la canción (arrastrar las tiras,
-   clic en un compás para rebobinar, modo `[D]` para afinar pulsos).
-4. Exporta el video `.mp4` sincronizado.
+1. **Cargar** las hojas `.mscz` (una por archivo o un archivo multi-hoja; se
+   reordenan arrastrando) y el audio de la canción (mp3, wav, m4a, ogg, flac…).
+2. **Configurar** lo que haga falta (resolución, línea lectora, conteo…) — o
+   nada: los valores por defecto funcionan.
+3. **Generar** — la aplicación renderiza y abre el **editor de
+   sincronización**.
+4. **Sincronizar**: arrastrar las bandas para alinear partitura y canción,
+   verificar con ▶ (y «Probar el final»), afinar pulsos con `[D]` si hace
+   falta.
+5. **✓ Listo** → «Generar video con audio» — y descargar el MP4 (junto con el
+   proyecto `.sscroll`, si la casilla queda marcada).
 
-### Proyectos (`.sscroll`)
+### Atajos del editor
 
-Al terminar de sincronizar, el botón **✓ Listo** del editor abre las opciones
-de salida. La casilla **«Guardar también el proyecto»** viene siempre marcada:
-junto con el video se descarga un único archivo `.sscroll` (con el nombre de
-la canción) que contiene las partituras, el audio, la configuración, la
-alineación y las correcciones de pulsos.
+| Acción | Cómo |
+|---|---|
+| Alinear partitura ↔ canción | arrastrar la banda superior (partitura) o inferior (canción) |
+| Mover el cursor | arrastrar la línea blanca, o clic en las tiras |
+| Rebobinar a un compás | clic sobre ese compás en la hoja |
+| Reproducir / pausar | `Espacio` |
+| Retroceder / avanzar un pulso | `←` / `→` (con `Shift`: afinar la canción ±10 ms) |
+| Zoom en las tiras | rueda del ratón |
+| Diagnóstico y corrección de pulsos | `D`, luego seleccionar un pulso y «✏ Corregir» |
 
-Para retomar el trabajo (o continuarlo en otra computadora), arrastra ese
-`.sscroll` a la pantalla de inicio: se abre **directamente el editor**, tal
-cual quedó al guardarlo — ajusta lo que haga falta y vuelve a generar, sin
-realinear nada. La sincronización guardada es independiente de la resolución.
+## Proyectos (`.sscroll`)
 
-El formato del archivo está **definido y congelado** en
+Al terminar, la casilla **«Guardar también el proyecto»** (siempre marcada)
+descarga junto al video un único archivo `.sscroll` con **todo**: las hojas,
+el audio, la configuración, la alineación y las correcciones de pulsos.
+
+Para retomar el trabajo — o continuarlo en **otra computadora** — basta
+arrastrar ese archivo a la pantalla de inicio: la aplicación muestra qué
+contiene, permite ajustar la configuración (por ejemplo la resolución) y abre
+el editor **tal cual quedó al guardarse**. La sincronización es independiente
+de la resolución.
+
+El formato está **definido y congelado** en
 [`docs/FORMATO_SSCROLL.md`](docs/FORMATO_SSCROLL.md): los proyectos guardados
 hoy podrán abrirse siempre, sin importar cuánto evolucione la aplicación.
 
-> Está pensado para **hojas de un solo pentagrama** (como las de batería). Las
-> partituras multi-pentagrama (piano, cuarteto, coro) no están soportadas y se
-> rechazan con un aviso claro.
+## Limitaciones
+
+- Pensado para **hojas de un solo pentagrama** (como las de batería). Las
+  partituras multi-pentagrama (piano, cuarteto, coro) se rechazan con un
+  aviso claro.
+- La aplicación corre **localmente** (no es un servicio web público): un
+  usuario a la vez.
 
 ## Estructura del proyecto
 
 | Archivo | Qué hace |
 |---|---|
 | `main.py` | Punto de entrada: levanta el servidor y abre el navegador. |
-| `app.py` | Servidor Flask: subida, trabajos, progreso (SSE) y editor. |
+| `app.py` | Servidor Flask: subida, trabajos, progreso (SSE), proyectos y editor. |
 | `score_engine.py` | Motor: parseo de la partitura, geometría, keyframes y render de cada frame. |
 | `musescore_pipeline.py` | Llama a MuseScore para exportar PNG/SVG de cada hoja. |
-| `audio_sync.py` | Análisis del audio (detección de golpes / envolvente de onda). |
+| `audio_sync.py` | Análisis del audio (detección de golpes y envolvente de onda). |
 | `progress.py` | Barras de progreso en consola. |
-| `templates/index.html` | Toda la interfaz web (subida + editor de sincronización). |
+| `templates/index.html` | Toda la interfaz web (inicio + editor de sincronización). |
+| `docs/` | Banner, capturas y la especificación del formato `.sscroll`. |
 | `vendor/` | Binarios opcionales para empaquetar en Windows (`ffmpeg.exe`). |
-| `build.spec` | Config de PyInstaller para generar el `.exe`. |
+| `build.spec` | Configuración de PyInstaller para generar el `.exe`. |
 
-## Empaquetar (opcional)
-
-Para generar un ejecutable con PyInstaller:
-
-```bash
-pyinstaller build.spec
-```
+Para generar un ejecutable de Windows: `pyinstaller build.spec`.
 
 ## Licencia
 
-Copyright (C) 2026 **N4DU**
+Copyright © 2026 **N4DU**
 
 Scrolling Score es software libre bajo la **GNU Affero General Public License
 v3.0 (AGPL-3.0)** — ver [`LICENSE`](LICENSE). Puede usarse, estudiarse,
@@ -102,5 +149,7 @@ modificarse y compartirse libremente; pero quien distribuya una versión
 modificada **o la ofrezca como servicio en red** debe publicar su código
 fuente bajo esta misma licencia. Se entrega sin ninguna garantía.
 
-> `vendor/ffmpeg.exe` se distribuye bajo su propia licencia (FFmpeg, LGPL/GPL),
-> independiente de la de este proyecto.
+> `vendor/ffmpeg.exe` se distribuye bajo su propia licencia
+> ([FFmpeg](https://ffmpeg.org/legal.html), LGPL/GPL), independiente de la de
+> este proyecto. MuseScore es una aplicación externa que el usuario instala
+> por su cuenta.
