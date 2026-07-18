@@ -160,6 +160,25 @@ body {
 }
 .drop-zone .dz-proj b { color: var(--text); }
 
+/* ── Tarjeta de proyecto abierto (.sscroll) ── */
+.project-card { display: none; border-color: var(--orange); }
+.project-card.visible { display: block; }
+.pc-head { display: flex; align-items: flex-start; gap: 12px; }
+.pc-icon { font-size: 1.7rem; line-height: 1.2; }
+.pc-headtx { flex: 1; min-width: 0; }
+.pc-title { font-weight: 650; font-size: 1.02rem; }
+.pc-sub { color: var(--muted); font-size: 0.83rem; margin-top: 2px; }
+.pc-close {
+  background: none; border: none; color: var(--muted); font-size: 1.4rem;
+  cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.pc-close:hover { color: var(--red); background: var(--surface2); }
+.pc-desc {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 0.84rem; line-height: 1.5;
+}
+.pc-desc b { color: var(--text); }
+
 /* ── File List ── */
 .file-list-section { display: none; }
 .file-list-section.visible { display: block; }
@@ -679,6 +698,24 @@ body {
     <input type="file" id="fileInput" accept=".mscz,.sscroll" multiple style="display:none">
   </div>
 
+  <!-- Proyecto abierto (.sscroll): reemplaza a las zonas de carga -->
+  <div class="project-card card" id="projectCard">
+    <div class="pc-head">
+      <span class="pc-icon">&#128230;</span>
+      <div class="pc-headtx">
+        <div class="pc-title" id="pcTitle">Proyecto abierto</div>
+        <div class="pc-sub" id="pcSub"></div>
+      </div>
+      <button class="pc-close" id="pcClose" type="button" title="Quitar el proyecto y volver a empezar">&times;</button>
+    </div>
+    <div class="pc-desc">
+      Este archivo contiene el trabajo completo: las hojas, el audio, la
+      configuraci&oacute;n y la sincronizaci&oacute;n del editor (alineaci&oacute;n y pulsos
+      corregidos). Al continuar, el editor se abrir&aacute; <b>tal cual qued&oacute; al
+      guardarse</b>. La configuraci&oacute;n puede ajustarse antes de continuar.
+    </div>
+  </div>
+
   <!-- Audio Zone -->
   <div class="audio-zone card" id="audioZone">
     <div class="az-row">
@@ -1053,10 +1090,15 @@ function addFiles(newFiles) {
 // da "Generar Video" — sin volver a elegir archivos ni realinear nada.
 let projectLoaded = false;   // hay un proyecto abierto (job ya creado)
 let projectState  = null;    // {offset, pulse_fixes} pendientes para el editor
+const projectCard = document.getElementById("projectCard");
 function clearProject() {
   projectLoaded = false; projectState = null;
   files = []; clearAudioFile(); renderFileList();
+  projectCard.classList.remove("visible");
+  dropZone.style.display = ""; audioZone.style.display = "";
+  btnGenerate.textContent = "Generar Video";
 }
+document.getElementById("pcClose").addEventListener("click", clearProject);
 async function openProjectFile(f) {
   errorBox.classList.remove("visible");
   const fd = new FormData();
@@ -1079,15 +1121,20 @@ async function openProjectFile(f) {
   // archivos ya están en el servidor, no se reordenan ni se quitan)
   files = res.mscz_names.map(n => ({ name: n, __project: true }));
   renderFileList();
-  if (res.audio_name) {
-    audioZone.classList.add("has-file");
-    audioFilename.textContent = "♪ " + res.audio_name + " (del proyecto)";
-    audioFilename.style.display = "";
-    audioDesc.style.display = "none";
-  }
-  // directo al editor: el proyecto ya trae todo (partituras, audio, config y
-  // sincronización) — se abre calcado a como se guardó, listo para ajustar
-  btnGenerate.click();
+  // La tarjeta de proyecto REEMPLAZA a las zonas de carga: deja claro que el
+  // archivo ya trae todo (por eso no se pueden agregar hojas ni audio) y da
+  // tiempo a ajustar la configuración (p. ej. la resolución) antes de abrir.
+  const nh = res.mscz_names.length;
+  document.getElementById("pcTitle").textContent =
+    "Proyecto abierto: «" + (res.song_name || "sin nombre") + "»";
+  document.getElementById("pcSub").textContent =
+    nh + (nh === 1 ? " hoja" : " hojas") +
+    (res.audio_name ? " · audio incluido" : " · sin audio") +
+    " · configuración y sincronización guardadas";
+  projectCard.classList.add("visible");
+  dropZone.style.display = "none";
+  audioZone.style.display = "none";
+  btnGenerate.textContent = "Abrir el proyecto en el editor";
 }
 
 // ─── audio slot ──────────────────────────────────────────────────────────────
@@ -1592,11 +1639,10 @@ btnDownload.addEventListener("click", () => {
 });
 
 btnReset.addEventListener("click", () => {
+  clearProject();              // restaura también las zonas de carga
   files         = [];
   currentJobId  = null;
   hadEditor     = false;
-  projectLoaded = false;
-  projectState  = null;
   projSaveWanted = false;
   if (evtSource) { evtSource.close(); evtSource = null; }
   clearAudioFile();
