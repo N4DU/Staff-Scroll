@@ -13,6 +13,12 @@ renderiza con MuseScore, detecta los golpes del audio y arma un video donde una
 línea lectora recorre la partitura al ritmo de la música. Antes de exportar,
 la sincronización puede ajustarse a mano en un editor visual.
 
+> **In English:** Scrolling Score turns **MuseScore drum sheet music** (`.mscz`)
+> into a **scrolling sheet-music video synchronized with the real song audio**
+> — a play-along / practice video where a playhead follows the score in time
+> with the recording. It includes a browser-based sync editor (beat-accurate
+> alignment, per-note fine-tuning) and exports MP4. Local Flask app; AGPL-3.0.
+
 ---
 
 ## Requisitos
@@ -55,6 +61,10 @@ Para retomar el trabajo (o continuarlo en otra computadora), arrastra ese
 `.sscroll` a la pantalla de inicio: se abre **directamente el editor**, tal
 cual quedó al guardarlo — ajusta lo que haga falta y vuelve a generar, sin
 realinear nada. La sincronización guardada es independiente de la resolución.
+
+El formato del archivo está **definido y congelado** en
+[`docs/FORMATO_SSCROLL.md`](docs/FORMATO_SSCROLL.md): los proyectos guardados
+hoy podrán abrirse siempre, sin importar cuánto evolucione la aplicación.
 
 > Está pensado para **hojas de un solo pentagrama** (como las de batería). Las
 > partituras multi-pentagrama (piano, cuarteto, coro) no están soportadas y se

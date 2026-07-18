@@ -250,6 +250,20 @@ def create_app():
             ap = j.get("audio_path")
             if ap and os.path.isfile(ap):
                 z.write(ap, "audio/" + os.path.basename(ap))
+            # Miniatura de cortesía (primera hoja): igual que hace MuseScore
+            # con sus .mscz. Es OPCIONAL en el formato — quien lea el archivo
+            # no debe depender de ella (ver docs/FORMATO_SSCROLL.md).
+            try:
+                from PIL import Image as _Img
+                first_png = os.path.join(j.get("png_dir") or "", "1-score-1.png")
+                if os.path.isfile(first_png):
+                    im = _Img.open(first_png).convert("RGB")
+                    im.thumbnail((384, 544))
+                    tb = io.BytesIO()
+                    im.save(tb, "PNG", optimize=True)
+                    z.writestr("thumbnail.png", tb.getvalue())
+            except Exception:
+                pass                       # sin miniatura sigue siendo válido
         buf.seek(0)
         name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", meta["song_name"]).strip() or "proyecto"
         return send_file(buf, as_attachment=True,
