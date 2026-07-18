@@ -224,7 +224,7 @@ def create_app():
         j = jobs.get(job_id)
         if not j or j.get("_gone") or not j.get("mscz_paths"):
             return jsonify({"error": "El trabajo ya no está disponible — "
-                            "generá el video de nuevo."}), 409
+                            "genera el video de nuevo."}), 409
         data = request.get_json(silent=True) or {}
         try:
             fixes = []
@@ -261,7 +261,7 @@ def create_app():
         import json, zipfile
         f = request.files.get("project")
         if not f or not f.filename.lower().endswith(".sscroll"):
-            return jsonify({"error": "Subí un archivo de proyecto .sscroll"}), 400
+            return jsonify({"error": "El archivo debe ser un proyecto .sscroll"}), 400
         _sweep_stale_workdirs()
         job_id = uuid.uuid4().hex[:10]
         job_dir = os.path.join(tempfile.gettempdir(), f"scrolling_score_{job_id}")
@@ -302,6 +302,15 @@ def create_app():
             return _reject("No se pudo leer el proyecto — ¿el archivo está dañado?")
         if not saved_paths:
             return _reject("El proyecto no contiene partituras.")
+        # formato de versiones FUTURAS: mejor un aviso claro que abrirlo a
+        # medias con comportamiento impredecible
+        try:
+            fmt = int(meta.get("format", 1))
+        except (TypeError, ValueError):
+            fmt = 1
+        if fmt > 1:
+            return _reject("Este proyecto se guardó con una versión más nueva "
+                           "de Scrolling Score — actualiza la aplicación para abrirlo.")
         try:
             fixes = []
             for pf in (meta.get("pulse_fixes") or [])[:4000]:
@@ -352,7 +361,7 @@ def create_app():
         with _jobs_lock:
             if j.get("_gone"):
                 return jsonify({"error": "Este trabajo ya se descargó y se "
-                                "limpió — generá el video de nuevo."}), 409
+                                "limpió — genera el video de nuevo."}), 409
             if j.get("finalizing"):
                 return jsonify({"error": "Ya se está generando el video final"}), 409
             j["finalizing"] = True
