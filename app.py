@@ -212,6 +212,120 @@ def create_app():
             return jsonify({"error": "Datos del editor no disponibles"}), 404
         return jsonify(j["editor_data"])
 
+    # ── proyecto (.sscroll): guardar y abrir ─────────────────────────────────
+    # Un archivo AUTOCONTENIDO (zip) con las partituras, el audio y un
+    # project.json (configuración + alineación + correcciones de pulsos).
+    # Todo lo del json es independiente de la resolución (fracciones y
+    # segundos), así que el proyecto se reabre igual en cualquier máquina.
+
+    @app.route("/project/<job_id>", methods=["POST"])
+    def project_save(job_id):
+        import io, json, zipfile
+        j = jobs.get(job_id)
+        if not j or j.get("_gone") or not j.get("mscz_paths"):
+            return jsonify({"error": "El trabajo ya no está disponible — "
+                            "generá el video de nuevo."}), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            fixes = []
+            for f in (data.get("pulse_fixes") or [])[:4000]:
+                fixes.append({"i": int(f["i"]), "k": int(f["k"]),
+                              "x": min(1.0, max(0.0, float(f["x"])))})
+            meta = {
+                "app": "Scrolling Score", "format": 1,
+                "settings": data.get("settings") if isinstance(data.get("settings"), dict) else {},
+                "offset": max(-7200.0, min(7200.0, float(data.get("offset", 0.0)))),
+                "pulse_fixes": fixes,
+                "song_name": str(j.get("song_name") or ""),
+            }
+        except (TypeError, ValueError, KeyError):
+            return jsonify({"error": "Parámetros inválidos"}), 400
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("project.json",
+                       json.dumps(meta, ensure_ascii=False, indent=1))
+            for p in j["mscz_paths"]:
+                if os.path.isfile(p):
+                    z.write(p, "partituras/" + os.path.basename(p))
+            ap = j.get("audio_path")
+            if ap and os.path.isfile(ap):
+                z.write(ap, "audio/" + os.path.basename(ap))
+        buf.seek(0)
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", meta["song_name"]).strip() or "proyecto"
+        return send_file(buf, as_attachment=True,
+                         download_name=f"{name}.sscroll",
+                         mimetype="application/zip")
+
+    @app.route("/project_open", methods=["POST"])
+    def project_open():
+        import json, zipfile
+        f = request.files.get("project")
+        if not f or not f.filename.lower().endswith(".sscroll"):
+            return jsonify({"error": "Subí un archivo de proyecto .sscroll"}), 400
+        _sweep_stale_workdirs()
+        job_id = uuid.uuid4().hex[:10]
+        job_dir = os.path.join(tempfile.gettempdir(), f"scrolling_score_{job_id}")
+        mscz_dir = os.path.join(job_dir, "uploads")
+        os.makedirs(mscz_dir, exist_ok=True)
+
+        def _reject(msg):
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return jsonify({"error": msg}), 400
+
+        pk = os.path.join(job_dir, "project.sscroll")
+        f.save(pk)
+        try:
+            with zipfile.ZipFile(pk) as z:
+                names = z.namelist()
+                if "project.json" not in names:
+                    return _reject("El archivo no es un proyecto válido "
+                                   "(falta project.json).")
+                meta = json.loads(z.read("project.json").decode("utf-8"))
+                saved_paths, audio_path = [], None
+                # sólo el basename de cada miembro: nada de rutas del zip
+                for n in sorted(names):
+                    base = os.path.basename(n)
+                    if not base:
+                        continue
+                    if n.startswith("partituras/") and base.lower().endswith(".mscz"):
+                        dest = os.path.join(mscz_dir, base)
+                        with open(dest, "wb") as out:
+                            out.write(z.read(n))
+                        saved_paths.append(dest)
+                    elif n.startswith("audio/"):
+                        ext = os.path.splitext(base)[1].lower()
+                        if ext in AUDIO_EXTS:
+                            audio_path = os.path.join(job_dir, f"song{ext}")
+                            with open(audio_path, "wb") as out:
+                                out.write(z.read(n))
+        except (zipfile.BadZipFile, ValueError, KeyError, UnicodeDecodeError):
+            return _reject("No se pudo leer el proyecto — ¿el archivo está dañado?")
+        if not saved_paths:
+            return _reject("El proyecto no contiene partituras.")
+        try:
+            fixes = []
+            for pf in (meta.get("pulse_fixes") or [])[:4000]:
+                fixes.append({"i": int(pf["i"]), "k": int(pf["k"]),
+                              "x": min(1.0, max(0.0, float(pf["x"])))})
+            offset = max(-7200.0, min(7200.0, float(meta.get("offset", 0.0))))
+        except (TypeError, ValueError, KeyError):
+            return _reject("El project.json del proyecto tiene datos inválidos.")
+        jobs[job_id] = {
+            "pct": 0, "msg": "Proyecto abierto", "done": False, "error": None,
+            "output": None, "mscz_paths": saved_paths, "audio_path": audio_path,
+            "workdir": job_dir,
+        }
+        # el prefijo NNN- que pone /upload se quita para mostrar el nombre real
+        pretty = [re.sub(r"^\d{3}-", "", os.path.basename(p)) for p in saved_paths]
+        return jsonify({
+            "job_id": job_id,
+            "settings": meta.get("settings") if isinstance(meta.get("settings"), dict) else {},
+            "offset": offset, "pulse_fixes": fixes,
+            "mscz_names": pretty,
+            "audio_name": os.path.basename(audio_path) if audio_path else None,
+            "song_name": str(meta.get("song_name") or ""),
+        })
+
     @app.route("/finalize/<job_id>", methods=["POST"])
     def finalize(job_id):
         j = jobs.get(job_id)

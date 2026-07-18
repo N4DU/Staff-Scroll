@@ -35,29 +35,76 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 32px 16px 64px;
 }
 
 .container {
   width: 100%;
-  max-width: 680px;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 24px;
 }
 
-/* ── Header ── */
-.app-header { text-align: center; }
+/* ── Barra de título (estilo aplicación de escritorio) ── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 22px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.ttl-left { display: flex; align-items: center; gap: 10px; }
+.ttl-logo {
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  background: var(--orange);
+  color: #1a1200;
+  border-radius: 7px;
+  font-size: 1.05rem;
+}
 .app-header h1 {
-  font-size: 2rem;
-  font-weight: 700;
-  color: var(--orange);
-  letter-spacing: -0.5px;
+  font-size: 1.06rem;
+  font-weight: 650;
+  letter-spacing: 0.1px;
+  color: var(--text);
 }
 .app-header p {
-  margin-top: 6px;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Área de trabajo: dos paneles, como una app ── */
+.workspace {
+  flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 26px;
+  align-content: start;
+  padding: 26px 22px 44px;
+}
+.pane { display: flex; flex-direction: column; gap: 18px; min-width: 0; align-content: start; }
+.pane-caption {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 860px) {
+  .workspace { grid-template-columns: 1fr; }
+  .app-header p { display: none; }
 }
 
 /* ── Cards ── */
@@ -104,6 +151,14 @@ body {
   text-decoration: underline;
   cursor: pointer;
 }
+.drop-zone .dz-proj {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.drop-zone .dz-proj b { color: var(--text); }
 
 /* ── File List ── */
 .file-list-section { display: none; }
@@ -583,18 +638,26 @@ body {
 <body>
 <div class="container">
 
-  <!-- Header -->
+  <!-- Barra de título, estilo aplicación de escritorio -->
   <header class="app-header">
-    <h1>Scrolling Score</h1>
-    <p>Convierte tus partituras de MuseScore en videos con desplazamiento sincronizado a la m&uacute;sica</p>
+    <div class="ttl-left">
+      <span class="ttl-logo">&#9835;</span>
+      <h1>Scrolling Score</h1>
+    </div>
+    <p>partituras de MuseScore &#8594; video sincronizado con la m&uacute;sica</p>
   </header>
+
+  <div class="workspace">
+  <div class="pane pane-left">
+  <div class="pane-caption">1 &middot; Material</div>
 
   <!-- Drop Zone -->
   <div class="drop-zone" id="dropZone">
     <div class="dz-icon">&#9835;</div>
     <div class="dz-title">Arrastra tus archivos .mscz aqu&iacute;</div>
     <div class="dz-sub">o <span class="dz-link" id="dzLink">haz clic para seleccionarlos</span></div>
-    <input type="file" id="fileInput" accept=".mscz" multiple style="display:none">
+    <div class="dz-proj">&#128193; tambi&eacute;n pod&eacute;s abrir un proyecto guardado (<b>.sscroll</b>)</div>
+    <input type="file" id="fileInput" accept=".mscz,.sscroll" multiple style="display:none">
   </div>
 
   <!-- Audio Zone -->
@@ -616,6 +679,11 @@ body {
     <div class="file-list-header">Archivos · arrastra para reordenar</div>
     <div id="fileList"></div>
   </section>
+
+  </div><!-- /pane-left -->
+
+  <div class="pane pane-right">
+  <div class="pane-caption">2 &middot; Generar</div>
 
   <!-- Configuración: botón + ventana modal -->
   <button class="options-toggle" id="optionsToggle" type="button">
@@ -805,6 +873,9 @@ body {
   <a class="btn-download" id="btnDownload">&#8595; Descargar el video</a>
   <button class="btn-reset" id="btnReset" type="button">Generar otro video</button>
 
+  </div><!-- /pane-right -->
+  </div><!-- /workspace -->
+
 </div>
 
 <!-- ═══ Editor de sincronización (pantalla completa) ═══ -->
@@ -816,6 +887,7 @@ body {
       <div class="ed-song" id="edSongName"></div>
     </div>
     <div class="ed-actions">
+      <button class="ed-btn" id="edSaveProj" type="button" title="Guarda un archivo .sscroll con las partituras, el audio, la configuraci&oacute;n y toda la sincronizaci&oacute;n — para reabrirlo despu&eacute;s y ajustar sin empezar de cero">&#128190; Guardar proyecto</button>
       <button class="ed-btn" id="edSkip" type="button">Continuar sin audio</button>
       <button class="ed-btn primary" id="edFinalize" type="button">&#10003; Generar video con audio</button>
     </div>
@@ -924,13 +996,58 @@ dzLink.addEventListener("click", e => { e.stopPropagation(); fileInput.click(); 
 fileInput.addEventListener("change", () => { addFiles([...fileInput.files]); fileInput.value = ""; });
 
 function addFiles(newFiles) {
+  // Un .sscroll es un PROYECTO completo: se abre y reemplaza la selección
+  const proj = newFiles.find(f => f.name.toLowerCase().endsWith(".sscroll"));
+  if (proj) { openProjectFile(proj); return; }
   // Si sueltan un audio en la zona principal, lo mandamos al slot de audio
   const audios = newFiles.filter(f => AUDIO_EXT_RE.test(f.name));
   if (audios.length > 0) setAudioFile(audios[0]);
   const msczOnly = newFiles.filter(f => f.name.toLowerCase().endsWith(".mscz"));
   if (msczOnly.length === 0) return;
+  if (projectLoaded) clearProject();   // volver al modo normal si agregan .mscz
   files = files.concat(msczOnly);
   renderFileList();
+}
+
+// ── abrir un proyecto .sscroll ──────────────────────────────────────────────
+// El servidor lo extrae y deja el trabajo listo (partituras + audio); acá se
+// aplican la configuración a la UI y se recuerdan la alineación y los pulsos
+// para restaurarlos cuando abra el editor. El usuario ajusta lo que quiera y
+// da "Generar Video" — sin volver a elegir archivos ni realinear nada.
+let projectLoaded = false;   // hay un proyecto abierto (job ya creado)
+let projectState  = null;    // {offset, pulse_fixes} pendientes para el editor
+function clearProject() {
+  projectLoaded = false; projectState = null;
+  files = []; clearAudioFile(); renderFileList();
+}
+async function openProjectFile(f) {
+  errorBox.classList.remove("visible");
+  const fd = new FormData();
+  fd.append("project", f, f.name);
+  let res;
+  try {
+    const r = await fetch("/project_open", { method: "POST", body: fd });
+    res = await r.json();
+    if (res.error) throw new Error(res.error);
+  } catch (err) {
+    showError("No se pudo abrir el proyecto: " + err.message);
+    return;
+  }
+  files = []; clearAudioFile();
+  currentJobId  = res.job_id;
+  projectLoaded = true;
+  projectState  = { offset: res.offset, pulse_fixes: res.pulse_fixes || [] };
+  applySettings({ ...FACTORY, ...(res.settings || {}) });
+  // mostrar las partituras del proyecto (la lista es informativa: los
+  // archivos ya están en el servidor, no se reordenan ni se quitan)
+  files = res.mscz_names.map(n => ({ name: n, __project: true }));
+  renderFileList();
+  if (res.audio_name) {
+    audioZone.classList.add("has-file");
+    audioFilename.textContent = "♪ " + res.audio_name + " (del proyecto)";
+    audioFilename.style.display = "";
+    audioDesc.style.display = "none";
+  }
 }
 
 // ─── audio slot ──────────────────────────────────────────────────────────────
@@ -988,14 +1105,17 @@ function renderFileList() {
   files.forEach((f, i) => {
     const item = document.createElement("div");
     item.className = "file-item";
-    item.draggable = true;
+    // las hojas de un proyecto abierto ya están en el servidor: se muestran
+    // pero no se reordenan ni se quitan (el orden vive en el proyecto)
+    item.draggable = !f.__project;
     item.dataset.idx = i;
     item.innerHTML = `
       <span class="file-handle" title="Arrastra para reordenar">&#8801;</span>
       <span class="file-num">${i + 1}</span>
       <span class="file-name" title="${f.name}">${f.name}</span>
-      <button class="file-remove" data-idx="${i}" title="Quitar">&times;</button>
+      ${f.__project ? "" : `<button class="file-remove" data-idx="${i}" title="Quitar">&times;</button>`}
     `;
+    if (f.__project) item.querySelector(".file-handle").style.visibility = "hidden";
     fileList.appendChild(item);
   });
 
@@ -1326,24 +1446,27 @@ btnGenerate.addEventListener("click", async () => {
   if (files.length === 0) return;
   setGenerating(true);
 
-  // 1. Upload
-  setProgress(2, "Subiendo archivos…");
-  const formData = new FormData();
-  files.forEach(f => formData.append("files", f, f.name));
-  if (audioFile) formData.append("audio", audioFile, audioFile.name);
+  // 1. Upload — salvo con un proyecto abierto: sus archivos ya están en el
+  // servidor (los subió /project_open) y el trabajo ya existe
+  if (!projectLoaded) {
+    setProgress(2, "Subiendo archivos…");
+    const formData = new FormData();
+    files.forEach(f => formData.append("files", f, f.name));
+    if (audioFile) formData.append("audio", audioFile, audioFile.name);
 
-  let uploadRes;
-  try {
-    const r = await fetch("/upload", { method: "POST", body: formData });
-    uploadRes = await r.json();
-    if (uploadRes.error) throw new Error(uploadRes.error);
-  } catch (err) {
-    showError("Error al subir archivos: " + err.message);
-    setGenerating(false);
-    return;
+    let uploadRes;
+    try {
+      const r = await fetch("/upload", { method: "POST", body: formData });
+      uploadRes = await r.json();
+      if (uploadRes.error) throw new Error(uploadRes.error);
+    } catch (err) {
+      showError("Error al subir archivos: " + err.message);
+      setGenerating(false);
+      return;
+    }
+
+    currentJobId = uploadRes.job_id;
   }
-
-  currentJobId = uploadRes.job_id;
 
   // 2. Start generate
   const res = chosenResolution();
@@ -1425,6 +1548,8 @@ btnReset.addEventListener("click", () => {
   files         = [];
   currentJobId  = null;
   hadEditor     = false;
+  projectLoaded = false;
+  projectState  = null;
   if (evtSource) { evtSource.close(); evtSource = null; }
   clearAudioFile();
   closeEditor();
@@ -1750,6 +1875,23 @@ function openEditor(jobId) {
     ed.finalize.disabled = false;
     ed.skip.disabled = false;
     edSheetKey = edTracksKey = "";
+    // proyecto reabierto: restaurar la alineación y las correcciones de
+    // pulsos guardadas — el usuario sigue exactamente donde lo dejó
+    if (projectState) {
+      edA = -(+projectState.offset || 0);        // offset() = edS − edA
+      for (const pf of projectState.pulse_fixes) {
+        const m = edData.measures[pf.i];
+        if (!m || !m.hx || !m.hx[pf.k]) continue;
+        m.hx[pf.k][1] = pf.x;
+        if (m.pid) {                              // espejar entre repeticiones
+          for (const mm of edData.measures)
+            if (mm !== m && mm.pid === m.pid && mm.hx && mm.hx[pf.k])
+              mm.hx[pf.k][1] = pf.x;
+        }
+        edPulseFixes[pf.i + "|" + pf.k] = pf.x;
+      }
+      projectState = null;
+    }
     fitAll();
     updateAll();
   }).catch(() => showError("No se pudieron cargar los datos del editor."));
@@ -2791,6 +2933,36 @@ ed.finalize.addEventListener("click", () => submitFinalize({
   offset: offset(), stretch: 1.0, pulse_fixes: pulseFixList() }));
 ed.skip.addEventListener("click",     () => submitFinalize({
   skip: true, pulse_fixes: pulseFixList() }));
+// 💾 Guardar proyecto: baja un .sscroll autocontenido (partituras + audio +
+// configuración + alineación + pulsos). Reabrirlo deja todo como está ahora.
+document.getElementById("edSaveProj").addEventListener("click", async () => {
+  const btn = document.getElementById("edSaveProj");
+  const prev = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = "Guardando…";
+  try {
+    const r = await fetch(`/project/${currentJobId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: gatherSettings(), offset: offset(),
+                             pulse_fixes: pulseFixList() }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || "error del servidor");
+    const blob = await r.blob();
+    const cd = r.headers.get("Content-Disposition") || "";
+    const m = /filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(cd);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? decodeURIComponent(m[1]) : "proyecto.sscroll";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    btn.innerHTML = "&#10003; Guardado";
+    setTimeout(() => { btn.innerHTML = prev; btn.disabled = false; }, 1800);
+  } catch (err) {
+    // el error se muestra EN el botón: el editor tapa la caja de errores
+    btn.innerHTML = "&#10007; No se pudo guardar";
+    setTimeout(() => { btn.innerHTML = prev; btn.disabled = false; }, 2500);
+  }
+});
 
 window.addEventListener("resize", () => {
   if (edData) { edSheetKey = edTracksKey = ""; resizeTracks(); drawTracks(); drawSheet(); }
